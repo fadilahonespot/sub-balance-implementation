@@ -1,0 +1,27 @@
+server:
+  port: 8080
+  read_timeout: 30s
+  write_timeout: 30s
+
+database:
+  host: localhost
+  port: 5432
+  user: postgres
+  password: password
+  dbname: sub_balance_db
+  sslmode: disable
+
+redis:
+  host: localhost
+  port: 6379
+  password: ""
+  db: 0
+
+sub_balance:
+  default_shard_count: 3
+  consistency_check_interval: 5m
+  advisory_lock_timeout: 15s
+  hot_account_shards:
+    "acc-hot-001": 5
+    "acc-hot-002": 5
+    "acc-hot-003": 3

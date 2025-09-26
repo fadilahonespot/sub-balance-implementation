@@ -1,0 +1,116 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+main
+sub-balance-app
+sub-balance-app_unix
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+coverage.html
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Log files
+*.log
+logs/
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Configuration files with sensitive data
+configs/config.yaml
+configs/config.yml
+configs/config.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Docker files
+.dockerignore
+
+# Air (hot reload) files
+tmp/
+
+# Profiling files
+*.prof
+profile.out
+cpu.prof
+mem.prof
+
+# Test coverage
+coverage.out
+coverage.html
+
+# Build artifacts
+dist/
+build/
+
+# Temporary files
+tmp/
+temp/
+
+# Migration files (keep structure but ignore generated ones)
+# migrations/*.sql
+
+# Documentation build
+docs/_build/
+
+# Node modules (if using any frontend tools)
+node_modules/
+
+# Package files
+*.tar.gz
+*.zip
+*.rar
+
+# Backup files
+*.bak
+*.backup
+
+# Lock files
+go.sum
+package-lock.json
+yarn.lock
+
+# Local development files
+local/
+dev/
+bin/
+examples/
+test/
+docs/
+reports/
+

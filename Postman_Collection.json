@@ -1,0 +1,481 @@
+{
+  "info": {
+    "name": "Sub Balance Implementation API",
+    "description": "API collection for Sub Balance Implementation with sub-balance sharding functionality",
+    "version": "1.0.0",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "accountId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "transactionId",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health & Monitoring",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Metrics",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/metrics",
+              "host": ["{{baseUrl}}"],
+              "path": ["metrics"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Account Management",
+      "item": [
+        {
+          "name": "Create Account",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('accountId', response.id);",
+                  "    console.log('Account ID set:', response.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wallet_no\": \"08123456789\",\n  \"wallet_type_id\": \"wallet_type_001\",\n  \"instance_type\": \"individual\",\n  \"currency_id\": \"IDR\",\n  \"owner_id\": \"user_12345\",\n  \"minimum_balance\": \"10000.00\",\n  \"upper_limit\": \"100000000.00\",\n  \"lower_limit\": \"0.00\",\n  \"use_sub_balance\": true,\n  \"shard_count\": 3\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/create",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", "create"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Account",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", "{{accountId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Account Balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/{{accountId}}/balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", "{{accountId}}", "balance"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List Accounts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/?limit=10&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", ""],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Account",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wallet_type_name\": \"Premium Wallet\",\n  \"instance_type\": \"corporate\",\n  \"wallet_status\": \"active\",\n  \"minimum_balance\": \"50000.00\",\n  \"upper_limit\": \"500000000.00\",\n  \"active\": true,\n  \"use_sub_balance\": true,\n  \"shard_count\": 5\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", "{{accountId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Account",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", "{{accountId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Migrate to Sub Balance",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shard_count\": 3\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/{{accountId}}/migrate-to-sub-balance",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", "{{accountId}}", "migrate-to-sub-balance"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Transaction Processing",
+      "item": [
+        {
+          "name": "Process Credit Transaction",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    const response = pm.response.json();",
+                  "    pm.collectionVariables.set('transactionId', response.transaction_id);",
+                  "    console.log('Transaction ID set:', response.transaction_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transaction_id\": \"txn_credit_001\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"1000000.00\",\n  \"transaction_type\": \"credit\",\n  \"description\": \"Initial deposit\",\n  \"metadata\": {\n    \"source\": \"bank_transfer\",\n    \"reference\": \"ref_001\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Process Debit Transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transaction_id\": \"txn_debit_001\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"250000.00\",\n  \"transaction_type\": \"debit\",\n  \"description\": \"Payment for goods\",\n  \"metadata\": {\n    \"merchant_id\": \"merchant_001\",\n    \"order_id\": \"order_12345\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Process Large Debit Transaction",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transaction_id\": \"txn_debit_large_001\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"500000.00\",\n  \"transaction_type\": \"debit\",\n  \"description\": \"Large payment\",\n  \"metadata\": {\n    \"merchant_id\": \"merchant_002\",\n    \"order_id\": \"order_67890\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Transaction",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/{{transactionId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "{{transactionId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Transaction History",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/account/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "account", "{{accountId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Transaction Summary",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/account/{{accountId}}/summary",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "account", "{{accountId}}", "summary"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Sub Balance Management",
+      "item": [
+        {
+          "name": "Get Sub Balance Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sub-balance/{{accountId}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sub-balance", "{{accountId}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Initialize Sub Balance",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shard_count\": 3\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sub-balance/{{accountId}}/initialize",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sub-balance", "{{accountId}}", "initialize"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Rebalance Shards",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sub-balance/{{accountId}}/rebalance",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sub-balance", "{{accountId}}", "rebalance"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Validate Consistency",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sub-balance/{{accountId}}/consistency",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sub-balance", "{{accountId}}", "consistency"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get Shard Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/sub-balance/{{accountId}}/shard/shard_12345_0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "sub-balance", "{{accountId}}", "shard", "shard_12345_0"]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Load Testing",
+      "item": [
+        {
+          "name": "Create Multiple Accounts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"wallet_no\": \"{{$randomInt}}\",\n  \"wallet_type_id\": \"wallet_type_001\",\n  \"instance_type\": \"individual\",\n  \"currency_id\": \"IDR\",\n  \"owner_id\": \"user_{{$randomInt}}\",\n  \"use_sub_balance\": true,\n  \"shard_count\": 3\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/account/create",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "account", "create"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Process Multiple Credit Transactions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transaction_id\": \"txn_load_{{$randomInt}}\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"{{$randomInt}}\",\n  \"transaction_type\": \"credit\",\n  \"description\": \"Load test transaction\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Process Multiple Debit Transactions",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transaction_id\": \"txn_debit_load_{{$randomInt}}\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"{{$randomInt}}\",\n  \"transaction_type\": \"debit\",\n  \"description\": \"Load test debit transaction\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
