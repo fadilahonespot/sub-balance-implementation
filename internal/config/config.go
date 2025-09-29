@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Server     ServerConfig     `mapstructure:"server"`
 	Database   DatabaseConfig   `mapstructure:"database"`
+	Sharding   ShardingConfig   `mapstructure:"sharding"`
 	Redis      RedisConfig      `mapstructure:"redis"`
 	SubBalance SubBalanceConfig `mapstructure:"sub_balance"`
 }
@@ -21,12 +22,19 @@ type ServerConfig struct {
 }
 
 type DatabaseConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	User     string `mapstructure:"user"`
-	Password string `mapstructure:"password"`
-	DBName   string `mapstructure:"dbname"`
-	SSLMode  string `mapstructure:"sslmode"`
+	Host           string `mapstructure:"host"`
+	Port           int    `mapstructure:"port"`
+	User           string `mapstructure:"user"`
+	Password       string `mapstructure:"password"`
+	DBName         string `mapstructure:"dbname"`
+	SSLMode        string `mapstructure:"sslmode"`
+	SkipMigrations bool   `mapstructure:"skip_migrations"`
+}
+
+type ShardingConfig struct {
+	Enabled    bool             `mapstructure:"enabled"`
+	ShardCount int              `mapstructure:"shard_count"`
+	Shards     []DatabaseConfig `mapstructure:"shards"`
 }
 
 type RedisConfig struct {
@@ -44,10 +52,18 @@ type SubBalanceConfig struct {
 }
 
 func Load() (*Config, error) {
-	viper.SetConfigName("config")
-	viper.SetConfigType("yaml")
-	viper.AddConfigPath("./configs")
-	viper.AddConfigPath(".")
+	// Enable automatic environment variable reading
+	viper.AutomaticEnv()
+
+	// Check for custom config file from environment
+	if configFile := viper.GetString("CONFIG_FILE"); configFile != "" {
+		viper.SetConfigFile(configFile)
+	} else {
+		viper.SetConfigName("config")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath("./configs")
+		viper.AddConfigPath(".")
+	}
 
 	// Set default values
 	setDefaults()

@@ -6,11 +6,16 @@ import (
 	"hash/crc32"
 	"strconv"
 	"strings"
+	"time"
+
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 // ShardRouter handles database sharding logic
 type ShardRouter struct {
 	shards     map[int]*sql.DB
+	gormShards map[int]*gorm.DB
 	shardCount int
 }
 
@@ -18,6 +23,7 @@ type ShardRouter struct {
 func NewShardRouter(shardConfigs map[string]string) (*ShardRouter, error) {
 	router := &ShardRouter{
 		shards:     make(map[int]*sql.DB),
+		gormShards: make(map[int]*gorm.DB),
 		shardCount: len(shardConfigs),
 	}
 
@@ -28,6 +34,7 @@ func NewShardRouter(shardConfigs map[string]string) (*ShardRouter, error) {
 			return nil, fmt.Errorf("invalid shard ID: %s", shardID)
 		}
 
+		// Create SQL connection
 		db, err := sql.Open("postgres", dsn)
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to shard %d: %w", id, err)
@@ -38,7 +45,25 @@ func NewShardRouter(shardConfigs map[string]string) (*ShardRouter, error) {
 			return nil, fmt.Errorf("failed to ping shard %d: %w", id, err)
 		}
 
+		// Create GORM connection
+		gormDB, err := gorm.Open(postgres.New(postgres.Config{
+			Conn: db,
+		}), &gorm.Config{})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create GORM connection for shard %d: %w", id, err)
+		}
+
+		// Configure GORM connection pool
+		sqlDB, err := gormDB.DB()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get underlying DB for shard %d: %w", id, err)
+		}
+		sqlDB.SetMaxOpenConns(25)
+		sqlDB.SetMaxIdleConns(10)
+		sqlDB.SetConnMaxLifetime(5 * time.Minute)
+
 		router.shards[id] = db
+		router.gormShards[id] = gormDB
 	}
 
 	return router, nil
@@ -89,6 +114,21 @@ func (sr *ShardRouter) GetAllShards() map[int]*sql.DB {
 // GetShardCount returns the number of shards
 func (sr *ShardRouter) GetShardCount() int {
 	return sr.shardCount
+}
+
+// GetGormShardConnection returns the GORM database connection for a given account ID
+func (sr *ShardRouter) GetGormShardConnection(accountID string) (*gorm.DB, int, error) {
+	shardID, err := sr.GetShardForAccount(accountID)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	db, ok := sr.gormShards[shardID]
+	if !ok {
+		return nil, 0, fmt.Errorf("GORM shard %d not found for account %s", shardID, accountID)
+	}
+
+	return db, shardID, nil
 }
 
 // Close closes all database connections

@@ -32,6 +32,21 @@ func NewHandlerFactory(db *gorm.DB, logger *zap.Logger) *HandlerFactory {
 	}
 }
 
+// NewHandlerFactoryWithRepos creates a new handler factory with existing repository factory
+func NewHandlerFactoryWithRepos(repoFactory *postgres.RepositoryFactory, logger *zap.Logger) *HandlerFactory {
+	repos := repoFactory.GetAllRepositories()
+
+	usecaseFactory := usecase.NewUsecaseFactory(repoFactory.GetDB(), repos, logger)
+	usecases := usecaseFactory.GetAllUsecases()
+
+	return &HandlerFactory{
+		db:       repoFactory.GetDB(),
+		logger:   logger,
+		repos:    repos,
+		usecases: usecases,
+	}
+}
+
 // GetHandler returns the REST handler
 func (hf *HandlerFactory) GetHandler() *Handler {
 	return &Handler{

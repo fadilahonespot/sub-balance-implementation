@@ -73,15 +73,18 @@ echo -e "${GREEN}✅ Account created: $ACCOUNT_ID${NC}"
 echo -e "${CYAN}💰 Crediting all $SHARD_COUNT shards...${NC}"
 for ((i=1; i<=SHARD_COUNT; i++)); do
     echo -e "${CYAN}   Crediting shard $i/$SHARD_COUNT...${NC}"
-    curl -s -X POST "$BASE_URL/transaction/execute" \
+    curl -s -X POST "$BASE_URL/api/v1/transaction/execute" \
         -H "Content-Type: application/json" \
         -d "{\"transaction_id\": \"credit_${i}_$(date +%s)\", \"account_id\": \"$ACCOUNT_ID\", \"amount\": \"$CREDIT_AMOUNT_PER_SHARD\", \"transaction_type\": \"credit\", \"description\": \"Initial credit for shard $i\", \"metadata\": {\"source\": \"single_test_script\"}}" > /dev/null
     
-    sleep 0.1
+    sleep 0.5
 done
 
+# Wait a bit more for all credits to be processed
+sleep 2
+
 # Get initial balance after credit setup
-ACC_BALANCE=$(curl -s "$BASE_URL/sub-balance/$ACCOUNT_ID" | jq -r '.total_balance // 0')
+ACC_BALANCE=$(curl -s "$BASE_URL/api/v1/sub-balance/$ACCOUNT_ID" | jq -r '.total_balance // 0')
 echo -e "${GREEN}✅ Test account ready with balance: $ACC_BALANCE${NC}"
 echo -e "${GREEN}✅ All $SHARD_COUNT shards credited with $CREDIT_AMOUNT_PER_SHARD each${NC}"
 
@@ -192,7 +195,7 @@ run_single_account_test() {
                 {
                     # Send individual transaction request
                     local transaction_id="single_debit_${test_name}_${second}_${i}_$(date +%s%3N)"
-                    local response=$(curl -s -X POST "$BASE_URL/transaction/execute" \
+                    local response=$(curl -s -X POST "$BASE_URL/api/v1/transaction/execute" \
                         -H "Content-Type: application/json" \
                         -d "{\"transaction_id\": \"$transaction_id\", \"account_id\": \"$ACCOUNT_ID\", \"amount\": \"1000\", \"transaction_type\": \"debit\", \"description\": \"Single account TPS test transaction\", \"metadata\": {\"source\": \"single_test_script\", \"test_type\": \"single_account_debit\"}}")
                     
@@ -292,7 +295,7 @@ run_single_account_test() {
     fi
     
     # Analyze shard usage
-    local shard_info=$(curl -s "$BASE_URL/sub-balance/$ACCOUNT_ID")
+    local shard_info=$(curl -s "$BASE_URL/api/v1/sub-balance/$ACCOUNT_ID")
     local shards_used=0
     local shard_balances=$(echo "$shard_info" | jq -r '.shards[] | select(.debit_amount != "0") | .shard_index' 2>/dev/null)
     if [ -n "$shard_balances" ]; then

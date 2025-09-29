@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
 
 # Set working directory
 WORKDIR /app
@@ -36,6 +36,9 @@ COPY --from=builder /app/main .
 
 # Copy config files
 COPY --from=builder /app/configs ./configs
+
+# Copy migrations
+COPY --from=builder /app/migrations ./migrations
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /root/

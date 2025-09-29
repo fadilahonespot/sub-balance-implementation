@@ -55,6 +55,7 @@ func (u *usecase) CreateAccount(ctx context.Context, req account.CreateAccountRe
 		CreatedBy:            "system", // TODO: Get from context
 		ModifiedBy:           "system", // TODO: Get from context
 		WalletNo:             req.WalletNo,
+		AccountName:          req.WalletNo, // Use wallet_no as account_name for now
 		WalletTypeId:         req.WalletTypeId,
 		WalletTypeName:       "", // Will be set later
 		InstanceType:         req.InstanceType,

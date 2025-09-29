@@ -6,18 +6,21 @@ import (
 	"time"
 
 	"sub-balance-implementation/internal/domain/account_balance_shard"
+	"sub-balance-implementation/internal/infra"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 // accountBalanceShardRepository implements the account_balance_shard.Repository interface
 type accountBalanceShardRepository struct {
-	db     *gorm.DB
-	logger *zap.Logger
+	db          *gorm.DB
+	shardRouter *infra.ShardRouter
+	logger      *zap.Logger
 }
 
 // NewAccountBalanceShardRepository creates a new account balance shard repository
@@ -25,6 +28,15 @@ func NewAccountBalanceShardRepository(db *gorm.DB, logger *zap.Logger) account_b
 	return &accountBalanceShardRepository{
 		db:     db,
 		logger: logger,
+	}
+}
+
+// NewAccountBalanceShardRepositoryWithSharding creates a new account balance shard repository with shard router
+func NewAccountBalanceShardRepositoryWithSharding(db *gorm.DB, shardRouter *infra.ShardRouter, logger *zap.Logger) account_balance_shard.Repository {
+	return &accountBalanceShardRepository{
+		db:          db,
+		shardRouter: shardRouter,
+		logger:      logger,
 	}
 }
 
@@ -38,7 +50,40 @@ func (r *accountBalanceShardRepository) Create(ctx context.Context, shard *accou
 	shard.CreatedOn = now
 	shard.ModifiedOn = now
 
-	if err := r.db.WithContext(ctx).Create(shard).Error; err != nil {
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for account balance shard creation",
+			zap.String("shard_id", shard.ID),
+			zap.String("parent_account_id", shard.ParentAccountID),
+		)
+
+		// Get GORM shard connection based on parent account ID
+		shardDB, shardID, err := r.shardRouter.GetGormShardConnection(shard.ParentAccountID)
+		if err != nil {
+			r.logger.Error("Failed to get GORM shard connection for account balance shard",
+				zap.String("shard_id", shard.ID),
+				zap.String("parent_account_id", shard.ParentAccountID),
+				zap.Error(err),
+			)
+			return fmt.Errorf("failed to get GORM shard connection: %w", err)
+		}
+
+		db = shardDB
+		r.logger.Info("Account balance shard will be created in shard",
+			zap.String("shard_id", shard.ID),
+			zap.String("parent_account_id", shard.ParentAccountID),
+			zap.Int("shard_id", shardID),
+		)
+	} else {
+		r.logger.Info("Using primary database for account balance shard creation",
+			zap.String("shard_id", shard.ID),
+			zap.String("parent_account_id", shard.ParentAccountID),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).Create(shard).Error; err != nil {
 		r.logger.Error("Failed to create account balance shard",
 			zap.String("shard_id", shard.ID),
 			zap.String("parent_account_id", shard.ParentAccountID),
@@ -61,7 +106,43 @@ func (r *accountBalanceShardRepository) Create(ctx context.Context, shard *accou
 func (r *accountBalanceShardRepository) GetByID(ctx context.Context, id string) (*account_balance_shard.AccountBalanceShard, error) {
 	var shard account_balance_shard.AccountBalanceShard
 
-	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&shard).Error; err != nil {
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for GetByID",
+			zap.String("shard_id", id),
+		)
+
+		// For now, try all shards since we don't have parentAccountID
+		// This is not optimal but works for the current implementation
+		allShards := r.shardRouter.GetAllShards()
+		for shardID, shardDB := range allShards {
+			gormDB, err := gorm.Open(postgres.New(postgres.Config{
+				Conn: shardDB,
+			}), &gorm.Config{})
+			if err != nil {
+				continue
+			}
+
+			if err := gormDB.WithContext(ctx).Where("id = ?", id).First(&shard).Error; err == nil {
+				r.logger.Info("Found shard in shard",
+					zap.String("shard_id", id),
+					zap.Int("shard_number", shardID),
+				)
+				return &shard, nil
+			}
+		}
+
+		// If not found in any shard, return not found error
+		return nil, fmt.Errorf("account balance shard not found: %s", id)
+	} else {
+		r.logger.Info("Using primary database for GetByID",
+			zap.String("shard_id", id),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).Where("id = ?", id).First(&shard).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, fmt.Errorf("account balance shard not found: %s", id)
 		}
@@ -79,7 +160,46 @@ func (r *accountBalanceShardRepository) GetByID(ctx context.Context, id string) 
 func (r *accountBalanceShardRepository) GetByIDForUpdate(ctx context.Context, id string) (*account_balance_shard.AccountBalanceShard, error) {
 	var shard account_balance_shard.AccountBalanceShard
 
-	if err := r.db.WithContext(ctx).
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for GetByIDForUpdate",
+			zap.String("shard_id", id),
+		)
+
+		// For now, try all shards since we don't have parentAccountID
+		// This is not optimal but works for the current implementation
+		allShards := r.shardRouter.GetAllShards()
+		for shardID, shardDB := range allShards {
+			gormDB, err := gorm.Open(postgres.New(postgres.Config{
+				Conn: shardDB,
+			}), &gorm.Config{})
+			if err != nil {
+				continue
+			}
+
+			if err := gormDB.WithContext(ctx).
+				Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("id = ?", id).
+				First(&shard).Error; err == nil {
+				r.logger.Info("Found shard for update in shard",
+					zap.String("shard_id", id),
+					zap.Int("shard_number", shardID),
+				)
+				return &shard, nil
+			}
+		}
+
+		// If not found in any shard, return not found error
+		return nil, fmt.Errorf("account balance shard not found: %s", id)
+	} else {
+		r.logger.Info("Using primary database for GetByIDForUpdate",
+			zap.String("shard_id", id),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("id = ?", id).
 		First(&shard).Error; err != nil {
@@ -100,7 +220,36 @@ func (r *accountBalanceShardRepository) GetByIDForUpdate(ctx context.Context, id
 func (r *accountBalanceShardRepository) GetByParentAccountID(ctx context.Context, parentAccountID string) ([]*account_balance_shard.AccountBalanceShard, error) {
 	var shards []*account_balance_shard.AccountBalanceShard
 
-	if err := r.db.WithContext(ctx).
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for GetByParentAccountID",
+			zap.String("parent_account_id", parentAccountID),
+		)
+
+		// Get GORM shard connection based on parent account ID
+		shardDB, shardID, err := r.shardRouter.GetGormShardConnection(parentAccountID)
+		if err != nil {
+			r.logger.Error("Failed to get GORM shard connection for GetByParentAccountID",
+				zap.String("parent_account_id", parentAccountID),
+				zap.Error(err),
+			)
+			return nil, fmt.Errorf("failed to get GORM shard connection: %w", err)
+		}
+
+		db = shardDB
+		r.logger.Info("Getting account balance shards from shard",
+			zap.String("parent_account_id", parentAccountID),
+			zap.Int("shard_id", shardID),
+		)
+	} else {
+		r.logger.Info("Using primary database for GetByParentAccountID",
+			zap.String("parent_account_id", parentAccountID),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).
 		Where("parent_account_id = ?", parentAccountID).
 		Order("shard_index ASC").
 		Find(&shards).Error; err != nil {
@@ -118,7 +267,36 @@ func (r *accountBalanceShardRepository) GetByParentAccountID(ctx context.Context
 func (r *accountBalanceShardRepository) GetByParentAccountIDForUpdate(ctx context.Context, parentAccountID string) ([]*account_balance_shard.AccountBalanceShard, error) {
 	var shards []*account_balance_shard.AccountBalanceShard
 
-	if err := r.db.WithContext(ctx).
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for GetByParentAccountIDForUpdate",
+			zap.String("parent_account_id", parentAccountID),
+		)
+
+		// Get GORM shard connection based on parent account ID
+		shardDB, shardID, err := r.shardRouter.GetGormShardConnection(parentAccountID)
+		if err != nil {
+			r.logger.Error("Failed to get GORM shard connection for GetByParentAccountIDForUpdate",
+				zap.String("parent_account_id", parentAccountID),
+				zap.Error(err),
+			)
+			return nil, fmt.Errorf("failed to get GORM shard connection: %w", err)
+		}
+
+		db = shardDB
+		r.logger.Info("Getting account balance shards for update from shard",
+			zap.String("parent_account_id", parentAccountID),
+			zap.Int("shard_id", shardID),
+		)
+	} else {
+		r.logger.Info("Using primary database for GetByParentAccountIDForUpdate",
+			zap.String("parent_account_id", parentAccountID),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).
 		Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("parent_account_id = ?", parentAccountID).
 		Order("shard_index ASC").
@@ -180,7 +358,40 @@ func (r *accountBalanceShardRepository) GetByShardHashForUpdate(ctx context.Cont
 func (r *accountBalanceShardRepository) UpdateBalance(ctx context.Context, shard *account_balance_shard.AccountBalanceShard) error {
 	shard.ModifiedOn = time.Now()
 
-	if err := r.db.WithContext(ctx).Save(shard).Error; err != nil {
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for UpdateBalance",
+			zap.String("shard_id", shard.ID),
+			zap.String("parent_account_id", shard.ParentAccountID),
+		)
+
+		// Get GORM shard connection based on parent account ID
+		shardDB, shardID, err := r.shardRouter.GetGormShardConnection(shard.ParentAccountID)
+		if err != nil {
+			r.logger.Error("Failed to get GORM shard connection for UpdateBalance",
+				zap.String("shard_id", shard.ID),
+				zap.String("parent_account_id", shard.ParentAccountID),
+				zap.Error(err),
+			)
+			return fmt.Errorf("failed to get GORM shard connection: %w", err)
+		}
+
+		db = shardDB
+		r.logger.Info("Account balance shard will be updated in shard",
+			zap.String("shard_id", shard.ID),
+			zap.String("parent_account_id", shard.ParentAccountID),
+			zap.Int("shard_id", shardID),
+		)
+	} else {
+		r.logger.Info("Using primary database for UpdateBalance",
+			zap.String("shard_id", shard.ID),
+			zap.String("parent_account_id", shard.ParentAccountID),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).Save(shard).Error; err != nil {
 		r.logger.Error("Failed to update account balance shard",
 			zap.String("shard_id", shard.ID),
 			zap.String("parent_account_id", shard.ParentAccountID),

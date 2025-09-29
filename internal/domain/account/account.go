@@ -15,6 +15,7 @@ type Account struct {
 	ModifiedBy           string          `json:"modified_by" gorm:"column:modified_by"`
 	ModifiedOn           time.Time       `json:"modified_on" gorm:"column:modified_on"`
 	WalletNo             string          `json:"wallet_no" gorm:"column:wallet_no"`
+	AccountName          string          `json:"account_name" gorm:"column:account_name"`
 	WalletTypeId         string          `json:"wallet_type_id" gorm:"column:wallet_type_id"`
 	WalletTypeName       string          `json:"wallet_type_name" gorm:"column:wallet_type_name"`
 	InstanceType         string          `json:"instance_type" gorm:"column:instance_type"`

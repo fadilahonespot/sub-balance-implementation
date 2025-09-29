@@ -65,6 +65,7 @@ services:
     ports:
       - "8080:8080"
     environment:
+      - CONFIG_FILE=configs/config.docker.yaml
       - SHARD_1_DSN=postgres://postgres:postgres@postgres-shard-1:5432/sub_balance_shard_1?sslmode=disable
       - SHARD_2_DSN=postgres://postgres:postgres@postgres-shard-2:5432/sub_balance_shard_2?sslmode=disable
       - SHARD_3_DSN=postgres://postgres:postgres@postgres-shard-3:5432/sub_balance_shard_3?sslmode=disable

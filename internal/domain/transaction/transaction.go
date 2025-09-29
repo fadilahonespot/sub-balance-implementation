@@ -23,7 +23,7 @@ type Transaction struct {
 	CreatedOn       time.Time       `json:"created_on" gorm:"column:created_on;autoCreateTime"`
 	ModifiedOn      time.Time       `json:"modified_on" gorm:"column:modified_on;autoUpdateTime"`
 	Checksum        string          `json:"checksum" gorm:"column:checksum"`
-	Metadata        string          `json:"metadata" gorm:"column:metadata;type:jsonb"`
+	Metadata        string          `json:"metadata" gorm:"column:metadata;type:jsonb;serializer:json"`
 }
 
 // TableName overrides the default table name

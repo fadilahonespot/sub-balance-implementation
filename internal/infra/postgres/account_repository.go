@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"sub-balance-implementation/internal/domain/account"
+	"sub-balance-implementation/internal/infra"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -14,8 +15,9 @@ import (
 
 // accountRepository implements the account.Repository interface
 type accountRepository struct {
-	db     *gorm.DB
-	logger *zap.Logger
+	db          *gorm.DB
+	shardRouter *infra.ShardRouter
+	logger      *zap.Logger
 }
 
 // NewAccountRepository creates a new account repository
@@ -23,6 +25,15 @@ func NewAccountRepository(db *gorm.DB, logger *zap.Logger) account.Repository {
 	return &accountRepository{
 		db:     db,
 		logger: logger,
+	}
+}
+
+// NewAccountRepositoryWithSharding creates a new account repository with shard router
+func NewAccountRepositoryWithSharding(db *gorm.DB, shardRouter *infra.ShardRouter, logger *zap.Logger) account.Repository {
+	return &accountRepository{
+		db:          db,
+		shardRouter: shardRouter,
+		logger:      logger,
 	}
 }
 
@@ -36,7 +47,36 @@ func (r *accountRepository) Create(ctx context.Context, acc *account.Account) er
 	acc.CreatedOn = now
 	acc.ModifiedOn = now
 
-	if err := r.db.WithContext(ctx).Create(acc).Error; err != nil {
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for account creation",
+			zap.String("account_id", acc.ID),
+		)
+
+		// Get GORM shard connection based on account ID
+		shardDB, shardID, err := r.shardRouter.GetGormShardConnection(acc.ID)
+		if err != nil {
+			r.logger.Error("Failed to get GORM shard connection",
+				zap.String("account_id", acc.ID),
+				zap.Error(err),
+			)
+			return fmt.Errorf("failed to get GORM shard connection: %w", err)
+		}
+
+		db = shardDB
+		r.logger.Info("Account will be created in shard",
+			zap.String("account_id", acc.ID),
+			zap.Int("shard_id", shardID),
+		)
+	} else {
+		r.logger.Info("Using primary database for account creation",
+			zap.String("account_id", acc.ID),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).Create(acc).Error; err != nil {
 		r.logger.Error("Failed to create account",
 			zap.String("account_id", acc.ID),
 			zap.String("wallet_no", acc.WalletNo),
@@ -57,7 +97,34 @@ func (r *accountRepository) Create(ctx context.Context, acc *account.Account) er
 func (r *accountRepository) GetByID(ctx context.Context, id string) (*account.Account, error) {
 	var acc account.Account
 
-	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&acc).Error; err != nil {
+	// Use shard router if available
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for GetByID",
+			zap.String("account_id", id),
+		)
+
+		shardDB, shardID, err := r.shardRouter.GetGormShardConnection(id)
+		if err != nil {
+			r.logger.Error("Failed to get GORM shard connection for GetByID",
+				zap.String("account_id", id),
+				zap.Error(err),
+			)
+			return nil, fmt.Errorf("failed to get GORM shard connection: %w", err)
+		}
+		db = shardDB
+		r.logger.Info("Getting account from shard",
+			zap.String("account_id", id),
+			zap.Int("shard_id", shardID),
+		)
+	} else {
+		r.logger.Info("Using primary database for GetByID",
+			zap.String("account_id", id),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).Where("id = ?", id).First(&acc).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, fmt.Errorf("account not found: %s", id)
 		}

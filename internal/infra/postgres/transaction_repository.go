@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"sub-balance-implementation/internal/domain/transaction"
+	"sub-balance-implementation/internal/infra"
 
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
@@ -16,8 +17,9 @@ import (
 
 // transactionRepository implements the transaction.Repository interface
 type transactionRepository struct {
-	db     *gorm.DB
-	logger *zap.Logger
+	db          *gorm.DB
+	shardRouter *infra.ShardRouter
+	logger      *zap.Logger
 }
 
 // NewTransactionRepository creates a new transaction repository
@@ -25,6 +27,15 @@ func NewTransactionRepository(db *gorm.DB, logger *zap.Logger) transaction.Repos
 	return &transactionRepository{
 		db:     db,
 		logger: logger,
+	}
+}
+
+// NewTransactionRepositoryWithSharding creates a new transaction repository with shard router
+func NewTransactionRepositoryWithSharding(db *gorm.DB, shardRouter *infra.ShardRouter, logger *zap.Logger) transaction.Repository {
+	return &transactionRepository{
+		db:          db,
+		shardRouter: shardRouter,
+		logger:      logger,
 	}
 }
 
@@ -47,7 +58,40 @@ func (r *transactionRepository) Create(ctx context.Context, txn *transaction.Tra
 		}
 	}
 
-	if err := r.db.WithContext(ctx).Create(txn).Error; err != nil {
+	// Use shard router if available, otherwise use primary database
+	var db *gorm.DB
+	if r.shardRouter != nil {
+		r.logger.Info("Using shard router for transaction creation",
+			zap.String("transaction_id", txn.ID),
+			zap.String("parent_account_id", txn.ParentAccountID),
+		)
+
+		// Get GORM shard connection based on parent account ID
+		shardDB, shardID, err := r.shardRouter.GetGormShardConnection(txn.ParentAccountID)
+		if err != nil {
+			r.logger.Error("Failed to get GORM shard connection for transaction",
+				zap.String("transaction_id", txn.ID),
+				zap.String("parent_account_id", txn.ParentAccountID),
+				zap.Error(err),
+			)
+			return fmt.Errorf("failed to get GORM shard connection: %w", err)
+		}
+
+		db = shardDB
+		r.logger.Info("Transaction will be created in shard",
+			zap.String("transaction_id", txn.ID),
+			zap.String("parent_account_id", txn.ParentAccountID),
+			zap.Int("shard_id", shardID),
+		)
+	} else {
+		r.logger.Info("Using primary database for transaction creation",
+			zap.String("transaction_id", txn.ID),
+			zap.String("parent_account_id", txn.ParentAccountID),
+		)
+		db = r.db
+	}
+
+	if err := db.WithContext(ctx).Create(txn).Error; err != nil {
 		r.logger.Error("Failed to create transaction",
 			zap.String("transaction_id", txn.TransactionID),
 			zap.String("parent_account_id", txn.ParentAccountID),

@@ -84,13 +84,16 @@ for ((i=0; i<ACCOUNT_COUNT; i++)); do
     
     # Credit each shard
     for ((j=1; j<=SHARD_COUNT; j++)); do
-        curl -s -X POST "$BASE_URL/transaction/execute" \
+        curl -s -X POST "$BASE_URL/api/v1/transaction/execute" \
             -H "Content-Type: application/json" \
             -d "{\"transaction_id\": \"credit_${i}_${j}_$(date +%s)\", \"account_id\": \"$ACCOUNT_ID\", \"amount\": \"$CREDIT_AMOUNT_PER_SHARD\", \"transaction_type\": \"credit\", \"description\": \"Initial credit for shard $j\", \"metadata\": {\"source\": \"multi_test_script\"}}" > /dev/null
     done
     
+    # Wait for credits to be processed
+    sleep 1
+    
     # Get final balance
-    FINAL_BALANCE=$(curl -s "$BASE_URL/sub-balance/$ACCOUNT_ID" | jq -r '.total_balance // 0')
+    FINAL_BALANCE=$(curl -s "$BASE_URL/api/v1/sub-balance/$ACCOUNT_ID" | jq -r '.total_balance // 0')
     ACCOUNT_BALANCES+=("$FINAL_BALANCE")
     echo -e "${GREEN}   ✅ Account $((i+1)) credited: $FINAL_BALANCE${NC}"
 done
@@ -205,7 +208,7 @@ run_multi_account_test() {
                     
                     # Send individual transaction request
                     local transaction_id="multi_debit_${test_name}_${second}_${i}_$(date +%s%3N)"
-                    local response=$(curl -s -X POST "$BASE_URL/transaction/execute" \
+                    local response=$(curl -s -X POST "$BASE_URL/api/v1/transaction/execute" \
                         -H "Content-Type: application/json" \
                         -d "{\"transaction_id\": \"$transaction_id\", \"account_id\": \"$selected_account\", \"amount\": \"1000\", \"transaction_type\": \"debit\", \"description\": \"Multi-account TPS test transaction\", \"metadata\": {\"source\": \"multi_test_script\", \"test_type\": \"multi_account_debit\", \"account_index\": $account_index}}")
                     
@@ -320,7 +323,7 @@ run_multi_account_test() {
     local total_shards_used=0
     for ((i=0; i<ACCOUNT_COUNT; i++)); do
         local account_id="${ACCOUNT_IDS[$i]}"
-        local shard_info=$(curl -s "$BASE_URL/sub-balance/$account_id" | jq -r '.shards | length' 2>/dev/null)
+        local shard_info=$(curl -s "$BASE_URL/api/v1/sub-balance/$account_id" | jq -r '.shards | length' 2>/dev/null)
         if [ "$shard_info" != "null" ] && [ -n "$shard_info" ]; then
             total_shards_used=$((total_shards_used + shard_info))
         fi
