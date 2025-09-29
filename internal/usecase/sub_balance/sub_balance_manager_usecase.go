@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"sort"
 	"time"
 
@@ -16,10 +17,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // usecase implements the sub_balance_manager.Usecase interface
 type usecase struct {
+	db                      *gorm.DB
 	accountRepo             account.Repository
 	accountBalanceShardRepo account_balance_shard.Repository
 	transactionRepo         transaction.Repository
@@ -42,8 +45,14 @@ func (u *usecase) convertMetadataToString(metadata map[string]interface{}) strin
 	return string(jsonBytes)
 }
 
+// generateHash generates a CRC32 hash from input string
+func (u *usecase) generateHash(input string) uint32 {
+	return crc32.ChecksumIEEE([]byte(input))
+}
+
 // NewUsecase creates a new sub balance manager usecase
 func NewUsecase(
+	db *gorm.DB,
 	accountRepo account.Repository,
 	accountBalanceShardRepo account_balance_shard.Repository,
 	transactionRepo transaction.Repository,
@@ -51,6 +60,7 @@ func NewUsecase(
 	logger *zap.Logger,
 ) sub_balance_manager.Usecase {
 	return &usecase{
+		db:                      db,
 		accountRepo:             accountRepo,
 		accountBalanceShardRepo: accountBalanceShardRepo,
 		transactionRepo:         transactionRepo,
@@ -186,9 +196,9 @@ func (u *usecase) GetSubBalanceInfo(ctx context.Context, accountID string) (*sub
 	return info, nil
 }
 
-// SelectShardForDebit selects the best shard for a debit operation
+// SelectShardForDebit selects the best shard for a debit operation using consistent hashing
 func (u *usecase) SelectShardForDebit(ctx context.Context, accountID string, amount decimal.Decimal) (*sub_balance_manager.ShardSelectionResult, error) {
-	u.logger.Info("Selecting shard for debit",
+	u.logger.Info("Selecting shard for debit with consistent hashing",
 		zap.String("account_id", accountID),
 		zap.String("amount", amount.String()),
 	)
@@ -203,12 +213,26 @@ func (u *usecase) SelectShardForDebit(ctx context.Context, accountID string, amo
 		return nil, fmt.Errorf("no shards found for account %s", accountID)
 	}
 
-	// Sort shards by balance (highest first) for debit operations
-	sort.Slice(shards, func(i, j int) bool {
-		return shards[i].TotalBalance.GreaterThan(shards[j].TotalBalance)
-	})
+	// Use consistent hashing for load balancing
+	// Generate hash from account ID + current timestamp for better distribution
+	hashInput := fmt.Sprintf("%s_%d", accountID, time.Now().UnixNano())
+	hash := u.generateHash(hashInput)
+	shardIndex := hash % uint32(len(shards))
 
-	// Find shard with sufficient balance
+	// Try the selected shard first
+	selectedShard := shards[shardIndex]
+	if selectedShard.TotalBalance.GreaterThanOrEqual(amount) {
+		return &sub_balance_manager.ShardSelectionResult{
+			SelectedShardID: selectedShard.ID,
+			ShardIndex:      selectedShard.ShardIndex,
+			ShardHash:       selectedShard.ShardHash,
+			CurrentBalance:  selectedShard.TotalBalance,
+			Strategy:        sub_balance_manager.StrategyConsistentHashing,
+			Reason:          "Selected shard using consistent hashing",
+		}, nil
+	}
+
+	// If selected shard doesn't have enough balance, find any shard with sufficient balance
 	for _, shard := range shards {
 		if shard.TotalBalance.GreaterThanOrEqual(amount) {
 			return &sub_balance_manager.ShardSelectionResult{
@@ -217,7 +241,7 @@ func (u *usecase) SelectShardForDebit(ctx context.Context, accountID string, amo
 				ShardHash:       shard.ShardHash,
 				CurrentBalance:  shard.TotalBalance,
 				Strategy:        sub_balance_manager.StrategyBalanceBased,
-				Reason:          "Selected shard with highest available balance",
+				Reason:          "Selected shard with sufficient balance after consistent hashing failed",
 			}, nil
 		}
 	}
@@ -351,68 +375,67 @@ func (u *usecase) IsAdvisoryLockAcquired(ctx context.Context, lockKey string) (b
 	return u.advisoryLockManager.IsAdvisoryLockAcquired(ctx, lockKey)
 }
 
-// ProcessDebitTransaction processes a debit transaction with shard-level locking
+// ProcessDebitTransaction processes a debit transaction with TRUE shard-level locking
 func (u *usecase) ProcessDebitTransaction(ctx context.Context, req sub_balance_manager.ProcessTransactionRequest) (*sub_balance_manager.TransactionResult, error) {
-	u.logger.Info("Processing debit transaction",
+	u.logger.Info("Processing debit transaction with TRUE shard-level locking",
 		zap.String("transaction_id", req.TransactionID),
 		zap.String("account_id", req.AccountID),
 		zap.String("amount", req.Amount.String()),
 	)
 
-	// Start database transaction with shard-level locking
+	// Try single shard first (NO account-level lock)
+	shardSelection, err := u.SelectShardForDebit(ctx, req.AccountID, req.Amount)
+	if err != nil {
+		// If single shard fails, try cross-shard transaction
+		u.logger.Info("Single shard debit failed, attempting cross-shard transaction",
+			zap.String("account_id", req.AccountID),
+			zap.String("amount", req.Amount.String()),
+			zap.Error(err),
+		)
+
+		// Convert to cross-shard request
+		crossShardReq := sub_balance_manager.ProcessCrossShardTransactionRequest{
+			TransactionID: req.TransactionID,
+			AccountID:     req.AccountID,
+			Amount:        req.Amount,
+			Description:   req.Description,
+			Metadata:      req.Metadata,
+		}
+
+		// Process cross-shard transaction
+		crossShardResult, crossShardErr := u.ProcessCrossShardTransaction(ctx, crossShardReq)
+		if crossShardErr != nil {
+			return nil, fmt.Errorf("both single shard and cross-shard debit failed: single_shard_error=%w, cross_shard_error=%w", err, crossShardErr)
+		}
+
+		// Convert cross-shard result to single transaction result
+		return &sub_balance_manager.TransactionResult{
+			TransactionID:   crossShardResult.TransactionID,
+			AccountID:       crossShardResult.AccountID,
+			Amount:          crossShardResult.TotalAmount,
+			TransactionType: sub_balance_manager.TransactionTypeDebit,
+			SelectedShardID: crossShardResult.ShardOperations[0].ShardID, // Use first shard as primary
+			ShardIndex:      crossShardResult.ShardOperations[0].ShardIndex,
+			PreviousBalance: crossShardResult.ShardOperations[0].PreviousBalance,
+			NewBalance:      crossShardResult.ShardOperations[0].NewBalance,
+			TotalBalance:    crossShardResult.TotalBalance,
+			ProcessedAt:     crossShardResult.ProcessedAt,
+			Status:          string(crossShardResult.Status),
+		}, nil
+	}
+
+	// Acquire shard-level lock for the selected shard (NO account-level lock)
+	shardLockInfo, err := u.advisoryLockManager.AcquireShardAdvisoryLock(ctx, shardSelection.SelectedShardID, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire shard lock: %w", err)
+	}
+	if !shardLockInfo.IsAcquired {
+		return nil, fmt.Errorf("failed to acquire shard lock for shard %s", shardSelection.SelectedShardID)
+	}
+
+	// Start database transaction with shard-level locking only
 	var result *sub_balance_manager.TransactionResult
-	err := u.executeInTransaction(ctx, func(txCtx context.Context) error {
-		// Try single shard first
-		shardSelection, err := u.SelectShardForDebit(txCtx, req.AccountID, req.Amount)
-		if err != nil {
-			// If single shard fails, try cross-shard transaction
-			u.logger.Info("Single shard debit failed, attempting cross-shard transaction",
-				zap.String("account_id", req.AccountID),
-				zap.String("amount", req.Amount.String()),
-				zap.Error(err),
-			)
-
-			// Convert to cross-shard request
-			crossShardReq := sub_balance_manager.ProcessCrossShardTransactionRequest{
-				TransactionID: req.TransactionID,
-				AccountID:     req.AccountID,
-				Amount:        req.Amount,
-				Description:   req.Description,
-				Metadata:      req.Metadata,
-			}
-
-			// Process cross-shard transaction
-			crossShardResult, crossShardErr := u.ProcessCrossShardTransaction(txCtx, crossShardReq)
-			if crossShardErr != nil {
-				return fmt.Errorf("both single shard and cross-shard debit failed: single_shard_error=%w, cross_shard_error=%w", err, crossShardErr)
-			}
-
-			// Convert cross-shard result to single transaction result
-			result = &sub_balance_manager.TransactionResult{
-				TransactionID:   crossShardResult.TransactionID,
-				AccountID:       crossShardResult.AccountID,
-				Amount:          crossShardResult.TotalAmount,
-				TransactionType: sub_balance_manager.TransactionTypeDebit,
-				SelectedShardID: crossShardResult.ShardOperations[0].ShardID, // Use first shard as primary
-				ShardIndex:      crossShardResult.ShardOperations[0].ShardIndex,
-				PreviousBalance: crossShardResult.ShardOperations[0].PreviousBalance,
-				NewBalance:      crossShardResult.ShardOperations[0].NewBalance,
-				TotalBalance:    crossShardResult.TotalBalance,
-				ProcessedAt:     crossShardResult.ProcessedAt,
-				Status:          string(crossShardResult.Status),
-			}
-			return nil
-		}
-
-		// Acquire shard-level lock for the selected shard
-		shardLockInfo, err := u.advisoryLockManager.AcquireShardAdvisoryLock(txCtx, shardSelection.SelectedShardID, 0)
-		if err != nil {
-			return fmt.Errorf("failed to acquire shard lock: %w", err)
-		}
-		if !shardLockInfo.IsAcquired {
-			return fmt.Errorf("failed to acquire shard lock for shard %s", shardSelection.SelectedShardID)
-		}
-
+	err = u.executeInTransaction(ctx, func(txCtx context.Context) error {
 		// Get shard for update
 		shard, err := u.accountBalanceShardRepo.GetByIDForUpdate(txCtx, shardSelection.SelectedShardID)
 		if err != nil {
@@ -491,7 +514,7 @@ func (u *usecase) ProcessDebitTransaction(ctx context.Context, req sub_balance_m
 		return nil, err
 	}
 
-	u.logger.Info("Debit transaction processed successfully",
+	u.logger.Info("Debit transaction processed successfully with TRUE shard-level locking",
 		zap.String("transaction_id", req.TransactionID),
 		zap.String("shard_id", result.SelectedShardID),
 	)
@@ -942,7 +965,9 @@ func (u *usecase) OptimizeShardDistribution(ctx context.Context, accountID strin
 
 // executeInTransaction executes a function within a database transaction
 func (u *usecase) executeInTransaction(ctx context.Context, fn func(context.Context) error) error {
-	// This is a placeholder implementation
-	// In a real implementation, this would use GORM's transaction support
-	return fn(ctx)
+	// Use GORM's transaction support for proper database transaction
+	return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		txCtx := context.WithValue(ctx, "tx", tx)
+		return fn(txCtx)
+	})
 }

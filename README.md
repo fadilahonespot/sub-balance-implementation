@@ -123,7 +123,7 @@ Transaction Flow:
 | `POST` | `/api/v1/account/create` | Create new account |
 | `GET` | `/api/v1/account/{id}` | Get account details |
 | `GET` | `/api/v1/account/{id}/balance` | Get account balance |
-| `POST` | `/api/v1/transaction/execute/transactionWithBP` | Process transaction |
+| `POST` | `/api/v1/transaction/execute` | Process transaction |
 | `GET` | `/api/v1/sub-balance/{id}` | Get sub-balance info |
 | `POST` | `/api/v1/sub-balance/{id}/rebalance` | Rebalance shards |
 
@@ -144,7 +144,7 @@ curl -X POST http://localhost:8080/api/v1/account/create \
   }'
 
 # 2. Process credit transaction
-curl -X POST http://localhost:8080/api/v1/transaction/execute/transactionWithBP \
+curl -X POST http://localhost:8080/api/v1/transaction/execute \
   -H "Content-Type: application/json" \
   -d '{
     "transaction_id": "txn_001",

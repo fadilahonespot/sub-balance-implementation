@@ -235,9 +235,9 @@
               "raw": "{\n  \"transaction_id\": \"txn_credit_001\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"1000000.00\",\n  \"transaction_type\": \"credit\",\n  \"description\": \"Initial deposit\",\n  \"metadata\": {\n    \"source\": \"bank_transfer\",\n    \"reference\": \"ref_001\"\n  }\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "raw": "{{baseUrl}}/api/v1/transaction/execute",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+              "path": ["api", "v1", "transaction", "execute"]
             }
           },
           "response": []
@@ -257,9 +257,9 @@
               "raw": "{\n  \"transaction_id\": \"txn_debit_001\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"250000.00\",\n  \"transaction_type\": \"debit\",\n  \"description\": \"Payment for goods\",\n  \"metadata\": {\n    \"merchant_id\": \"merchant_001\",\n    \"order_id\": \"order_12345\"\n  }\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "raw": "{{baseUrl}}/api/v1/transaction/execute",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+              "path": ["api", "v1", "transaction", "execute"]
             }
           },
           "response": []
@@ -279,9 +279,9 @@
               "raw": "{\n  \"transaction_id\": \"txn_debit_large_001\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"500000.00\",\n  \"transaction_type\": \"debit\",\n  \"description\": \"Large payment\",\n  \"metadata\": {\n    \"merchant_id\": \"merchant_002\",\n    \"order_id\": \"order_67890\"\n  }\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "raw": "{{baseUrl}}/api/v1/transaction/execute",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+              "path": ["api", "v1", "transaction", "execute"]
             }
           },
           "response": []
@@ -446,9 +446,9 @@
               "raw": "{\n  \"transaction_id\": \"txn_load_{{$randomInt}}\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"{{$randomInt}}\",\n  \"transaction_type\": \"credit\",\n  \"description\": \"Load test transaction\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "raw": "{{baseUrl}}/api/v1/transaction/execute",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+              "path": ["api", "v1", "transaction", "execute"]
             }
           },
           "response": []
@@ -468,9 +468,9 @@
               "raw": "{\n  \"transaction_id\": \"txn_debit_load_{{$randomInt}}\",\n  \"account_id\": \"{{accountId}}\",\n  \"amount\": \"{{$randomInt}}\",\n  \"transaction_type\": \"debit\",\n  \"description\": \"Load test debit transaction\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/transaction/execute/transactionWithBP",
+              "raw": "{{baseUrl}}/api/v1/transaction/execute",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "transaction", "execute", "transactionWithBP"]
+              "path": ["api", "v1", "transaction", "execute"]
             }
           },
           "response": []

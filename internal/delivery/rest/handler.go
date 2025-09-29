@@ -22,7 +22,7 @@ func NewHandler(db *gorm.DB, logger *zap.Logger) *Handler {
 	repoFactory := postgres.NewRepositoryFactory(db, logger)
 	repos := repoFactory.GetAllRepositories()
 
-	usecaseFactory := usecase.NewUsecaseFactory(repos, logger)
+	usecaseFactory := usecase.NewUsecaseFactory(db, repos, logger)
 	usecases := usecaseFactory.GetAllUsecases()
 
 	return &Handler{
@@ -50,10 +50,10 @@ func (h *Handler) RegisterRoutes(e *echo.Echo) {
 
 	// Transaction routes
 	transactionGroup := v1.Group("/transaction")
-	transactionGroup.POST("/execute/transactionWithBP", h.ProcessTransactionWithBP)
-	transactionGroup.GET("/:id", h.GetTransaction)
+	transactionGroup.POST("/execute", h.ProcessTransactionWithBP)
 	transactionGroup.GET("/account/:accountId", h.GetTransactionHistory)
 	transactionGroup.GET("/account/:accountId/summary", h.GetTransactionSummary)
+	transactionGroup.GET("/:id", h.GetTransaction)
 
 	// Sub Balance routes
 	subBalanceGroup := v1.Group("/sub-balance")

@@ -17,10 +17,11 @@ type SubBalanceManager struct {
 type ShardSelectionStrategy string
 
 const (
-	StrategyBalanceBased  ShardSelectionStrategy = "balance_based"
-	StrategyLoadBalancing ShardSelectionStrategy = "load_balancing"
-	StrategyRoundRobin    ShardSelectionStrategy = "round_robin"
-	StrategyHashBased     ShardSelectionStrategy = "hash_based"
+	StrategyBalanceBased      ShardSelectionStrategy = "balance_based"
+	StrategyLoadBalancing     ShardSelectionStrategy = "load_balancing"
+	StrategyRoundRobin        ShardSelectionStrategy = "round_robin"
+	StrategyHashBased         ShardSelectionStrategy = "hash_based"
+	StrategyConsistentHashing ShardSelectionStrategy = "consistent_hashing"
 )
 
 // TransactionType represents the type of transaction

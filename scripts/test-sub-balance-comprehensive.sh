@@ -94,7 +94,7 @@ EOF
 )
     
     echo -e "${CYAN}   Crediting shard $i/$SHARD_COUNT...${NC}"
-    curl -s -X POST "$BASE_URL/transaction/execute/transactionWithBP" \
+    curl -s -X POST "$BASE_URL/transaction/execute" \
         -H "Content-Type: application/json" \
         -d "$credit_data" > /dev/null
     
@@ -212,7 +212,7 @@ run_performance_test() {
                 {
                     # Send individual transaction request
                     local transaction_id="debit_${test_name}_${second}_${i}_$(date +%s%3N)"
-                    local response=$(curl -s -X POST "$BASE_URL/transaction/execute/transactionWithBP" \
+                    local response=$(curl -s -X POST "$BASE_URL/transaction/execute" \
                         -H "Content-Type: application/json" \
                         -d "{\"transaction_id\": \"$transaction_id\", \"account_id\": \"$ACCOUNT_ID\", \"amount\": \"1000\", \"transaction_type\": \"debit\", \"description\": \"TPS test transaction\", \"metadata\": {\"source\": \"test_script\", \"test_type\": \"tps_debit\"}}")
                     

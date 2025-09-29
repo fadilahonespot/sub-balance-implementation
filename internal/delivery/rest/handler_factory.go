@@ -10,9 +10,9 @@ import (
 
 // HandlerFactory creates and manages all handler instances
 type HandlerFactory struct {
-	db     *gorm.DB
-	logger *zap.Logger
-	repos  *postgres.AllRepositories
+	db       *gorm.DB
+	logger   *zap.Logger
+	repos    *postgres.AllRepositories
 	usecases *usecase.AllUsecases
 }
 
@@ -20,10 +20,10 @@ type HandlerFactory struct {
 func NewHandlerFactory(db *gorm.DB, logger *zap.Logger) *HandlerFactory {
 	repoFactory := postgres.NewRepositoryFactory(db, logger)
 	repos := repoFactory.GetAllRepositories()
-	
-	usecaseFactory := usecase.NewUsecaseFactory(repos, logger)
+
+	usecaseFactory := usecase.NewUsecaseFactory(db, repos, logger)
 	usecases := usecaseFactory.GetAllUsecases()
-	
+
 	return &HandlerFactory{
 		db:       db,
 		logger:   logger,

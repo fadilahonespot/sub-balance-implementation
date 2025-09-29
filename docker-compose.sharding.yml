@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  # Shard 1 - Database untuk Account ID 0-33%
+  postgres-shard-1:
+    image: postgres:15
+    container_name: postgres-shard-1
+    environment:
+      POSTGRES_DB: sub_balance_shard_1
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - shard1_data:/var/lib/postgresql/data
+      - ./scripts/init-shard-1.sql:/docker-entrypoint-initdb.d/init-shard-1.sql
+    networks:
+      - shard-network
+
+  # Shard 2 - Database untuk Account ID 34-66%
+  postgres-shard-2:
+    image: postgres:15
+    container_name: postgres-shard-2
+    environment:
+      POSTGRES_DB: sub_balance_shard_2
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - shard2_data:/var/lib/postgresql/data
+      - ./scripts/init-shard-2.sql:/docker-entrypoint-initdb.d/init-shard-2.sql
+    networks:
+      - shard-network
+
+  # Shard 3 - Database untuk Account ID 67-100%
+  postgres-shard-3:
+    image: postgres:15
+    container_name: postgres-shard-3
+    environment:
+      POSTGRES_DB: sub_balance_shard_3
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5434:5432"
+    volumes:
+      - shard3_data:/var/lib/postgresql/data
+      - ./scripts/init-shard-3.sql:/docker-entrypoint-initdb.d/init-shard-3.sql
+    networks:
+      - shard-network
+
+  # Redis untuk Advisory Lock (Optional)
+  redis:
+    image: redis:7-alpine
+    container_name: redis-advisory-locks
+    ports:
+      - "6379:6379"
+    networks:
+      - shard-network
+
+  # Application Server
+  app:
+    build: .
+    container_name: sub-balance-app
+    ports:
+      - "8080:8080"
+    environment:
+      - SHARD_1_DSN=postgres://postgres:postgres@postgres-shard-1:5432/sub_balance_shard_1?sslmode=disable
+      - SHARD_2_DSN=postgres://postgres:postgres@postgres-shard-2:5432/sub_balance_shard_2?sslmode=disable
+      - SHARD_3_DSN=postgres://postgres:postgres@postgres-shard-3:5432/sub_balance_shard_3?sslmode=disable
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - postgres-shard-1
+      - postgres-shard-2
+      - postgres-shard-3
+      - redis
+    networks:
+      - shard-network
+
+volumes:
+  shard1_data:
+  shard2_data:
+  shard3_data:
+
+networks:
+  shard-network:
+    driver: bridge

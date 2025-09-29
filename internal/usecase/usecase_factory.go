@@ -12,10 +12,12 @@ import (
 	transactionUsecase "sub-balance-implementation/internal/usecase/transaction"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // UsecaseFactory creates and manages all usecase instances
 type UsecaseFactory struct {
+	db     *gorm.DB
 	repos  *postgres.AllRepositories
 	logger *zap.Logger
 
@@ -27,8 +29,9 @@ type UsecaseFactory struct {
 }
 
 // NewUsecaseFactory creates a new usecase factory
-func NewUsecaseFactory(repos *postgres.AllRepositories, logger *zap.Logger) *UsecaseFactory {
+func NewUsecaseFactory(db *gorm.DB, repos *postgres.AllRepositories, logger *zap.Logger) *UsecaseFactory {
 	return &UsecaseFactory{
+		db:     db,
 		repos:  repos,
 		logger: logger,
 	}
@@ -72,6 +75,7 @@ func (uf *UsecaseFactory) GetTransactionUsecase() transaction.Usecase {
 func (uf *UsecaseFactory) GetSubBalanceManagerUsecase() sub_balance_manager.Usecase {
 	if uf.subBalanceManagerUsecase == nil {
 		uf.subBalanceManagerUsecase = sub_balance.NewUsecase(
+			uf.db,
 			uf.repos.Account,
 			uf.repos.AccountBalanceShard,
 			uf.repos.Transaction,
