@@ -1,6 +1,7 @@
 package rest
 
 import (
+	"sub-balance-implementation/internal/config"
 	"sub-balance-implementation/internal/infra/postgres"
 	"sub-balance-implementation/internal/usecase"
 
@@ -14,10 +15,11 @@ type HandlerFactory struct {
 	logger   *zap.Logger
 	repos    *postgres.AllRepositories
 	usecases *usecase.AllUsecases
+	config   *config.Config
 }
 
 // NewHandlerFactory creates a new handler factory
-func NewHandlerFactory(db *gorm.DB, logger *zap.Logger) *HandlerFactory {
+func NewHandlerFactory(db *gorm.DB, logger *zap.Logger, cfg *config.Config) *HandlerFactory {
 	repoFactory := postgres.NewRepositoryFactory(db, logger)
 	repos := repoFactory.GetAllRepositories()
 
@@ -29,17 +31,13 @@ func NewHandlerFactory(db *gorm.DB, logger *zap.Logger) *HandlerFactory {
 		logger:   logger,
 		repos:    repos,
 		usecases: usecases,
+		config:   cfg,
 	}
 }
 
 // GetHandler returns the REST handler
 func (hf *HandlerFactory) GetHandler() *Handler {
-	return &Handler{
-		db:       hf.db,
-		logger:   hf.logger,
-		repos:    hf.repos,
-		usecases: hf.usecases,
-	}
+	return NewHandler(hf.db, hf.logger, hf.config)
 }
 
 // GetRepositories returns all repositories

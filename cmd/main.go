@@ -48,15 +48,29 @@ func main() {
 	repoFactory := postgres.NewRepositoryFactory(db, logger)
 	defer repoFactory.Close()
 
-	// Initialize Echo
+	// Initialize Echo with high-performance configuration
 	e := echo.New()
 	e.HideBanner = true
 
-	// Middleware
-	e.Use(middleware.Logger())
+	// Middleware - optimized for high throughput
 	e.Use(middleware.Recover())
 	e.Use(middleware.CORS())
 	e.Use(middleware.RequestID())
+
+	// Custom logger middleware with minimal overhead
+	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Format: "method=${method}, uri=${uri}, status=${status}, time=${time_rfc3339}\n",
+	}))
+
+	// Add custom middleware for high concurrency
+	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			// Set high concurrency headers
+			c.Response().Header().Set("Connection", "keep-alive")
+			c.Response().Header().Set("Keep-Alive", "timeout=30")
+			return next(c)
+		}
+	})
 
 	// Health check
 	e.GET("/health", func(c echo.Context) error {
@@ -75,16 +89,21 @@ func main() {
 	})
 
 	// Initialize REST handlers
-	handlerFactory := rest.NewHandlerFactory(db, logger)
+	handlerFactory := rest.NewHandlerFactory(db, logger, cfg)
 	restHandler := handlerFactory.GetHandler()
 	restHandler.RegisterRoutes(e)
 
-	// Start server
+	// Start server with high-performance configuration
 	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
 		Handler:      e,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
+		IdleTimeout:  cfg.Server.IdleTimeout,
+
+		// High-performance settings
+		MaxHeaderBytes:    1 << 20, // 1 MB
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	// Start server in goroutine

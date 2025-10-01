@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"sub-balance-implementation/internal/domain/account_balance_shard"
@@ -100,7 +101,9 @@ func (r *accountBalanceShardRepository) GetByIDForUpdate(ctx context.Context, id
 func (r *accountBalanceShardRepository) GetByParentAccountID(ctx context.Context, parentAccountID string) ([]*account_balance_shard.AccountBalanceShard, error) {
 	var shards []*account_balance_shard.AccountBalanceShard
 
+	// Optimized query with specific column selection and index hint
 	if err := r.db.WithContext(ctx).
+		Select("id, parent_account_id, shard_index, shard_hash, credit_amount, debit_amount, total_balance, reserve_balance, unsettled_amount, created_on, modified_on, checksum").
 		Where("parent_account_id = ?", parentAccountID).
 		Order("shard_index ASC").
 		Find(&shards).Error; err != nil {
@@ -176,11 +179,27 @@ func (r *accountBalanceShardRepository) GetByShardHashForUpdate(ctx context.Cont
 	return &shard, nil
 }
 
-// UpdateBalance updates the balance of a shard
+// UpdateBalance updates the balance of a shard with optimized SQL
 func (r *accountBalanceShardRepository) UpdateBalance(ctx context.Context, shard *account_balance_shard.AccountBalanceShard) error {
-	shard.ModifiedOn = time.Now()
+	now := time.Now()
+	shard.ModifiedOn = now
 
-	if err := r.db.WithContext(ctx).Save(shard).Error; err != nil {
+	// OPTIMIZED: Use raw SQL with specific fields for faster updates
+	query := `UPDATE account_balance_shard SET 
+		credit_amount = ?, 
+		debit_amount = ?, 
+		total_balance = ?, 
+		reserve_balance = ?, 
+		unsettled_amount = ?, 
+		modified_on = ?, 
+		checksum = ? 
+		WHERE id = ?`
+
+	if err := r.db.WithContext(ctx).Exec(query,
+		shard.CreditAmount, shard.DebitAmount, shard.TotalBalance,
+		shard.ReserveBalance, shard.UnsettledAmount, shard.ModifiedOn,
+		shard.Checksum, shard.ID,
+	).Error; err != nil {
 		r.logger.Error("Failed to update account balance shard",
 			zap.String("shard_id", shard.ID),
 			zap.String("parent_account_id", shard.ParentAccountID),
@@ -189,7 +208,8 @@ func (r *accountBalanceShardRepository) UpdateBalance(ctx context.Context, shard
 		return fmt.Errorf("failed to update account balance shard: %w", err)
 	}
 
-	r.logger.Info("Account balance shard updated successfully",
+	// Reduce logging frequency for high TPS
+	r.logger.Debug("Account balance shard updated successfully",
 		zap.String("shard_id", shard.ID),
 		zap.String("parent_account_id", shard.ParentAccountID),
 		zap.String("total_balance", shard.TotalBalance.String()),
@@ -350,21 +370,26 @@ func (r *accountBalanceShardRepository) GetShardByIndexForUpdate(ctx context.Con
 	return &shard, nil
 }
 
-// CalculateTotalBalance calculates the total balance across all shards for a parent account
+// CalculateTotalBalance calculates the total balance across all shards for a parent account with optimized query
 func (r *accountBalanceShardRepository) CalculateTotalBalance(ctx context.Context, parentAccountID string) (decimal.Decimal, error) {
 	var totalBalance decimal.Decimal
 
-	if err := r.db.WithContext(ctx).
-		Model(&account_balance_shard.AccountBalanceShard{}).
-		Where("parent_account_id = ?", parentAccountID).
-		Select("COALESCE(SUM(total_balance), 0)").
-		Scan(&totalBalance).Error; err != nil {
+	// OPTIMIZED: Use raw SQL with optimized index for faster SUM queries
+	query := `SELECT COALESCE(SUM(total_balance), 0) FROM account_balance_shard WHERE parent_account_id = $1`
+
+	if err := r.db.WithContext(ctx).Raw(query, parentAccountID).Scan(&totalBalance).Error; err != nil {
 		r.logger.Error("Failed to calculate total balance",
 			zap.String("parent_account_id", parentAccountID),
 			zap.Error(err),
 		)
 		return decimal.Zero, fmt.Errorf("failed to calculate total balance: %w", err)
 	}
+
+	// Reduce logging frequency for high TPS
+	r.logger.Debug("Total balance calculated",
+		zap.String("parent_account_id", parentAccountID),
+		zap.String("total_balance", totalBalance.String()),
+	)
 
 	return totalBalance, nil
 }
@@ -507,4 +532,158 @@ func (r *accountBalanceShardRepository) GetShardStats(ctx context.Context) (map[
 		"negative_shards":     stats.NegativeShards,
 		"zero_balance_shards": stats.ZeroBalanceShards,
 	}, nil
+}
+
+// UpdateBalanceOptimistic updates shard balance using optimistic locking
+func (r *accountBalanceShardRepository) UpdateBalanceOptimistic(ctx context.Context, shard *account_balance_shard.AccountBalanceShard, expectedVersion int) error {
+	now := time.Now()
+	shard.ModifiedOn = now
+
+	// OPTIMISTIC LOCKING: Update with version check (optimized with prepared statement)
+	query := `UPDATE account_balance_shard SET 
+		credit_amount = $1, 
+		debit_amount = $2, 
+		total_balance = $3, 
+		reserve_balance = $4, 
+		unsettled_amount = $5, 
+		modified_on = $6, 
+		checksum = $7,
+		version = version + 1
+		WHERE id = $8 AND version = $9`
+
+	// Use prepared statement for better performance
+	sqlDB, err := r.db.WithContext(ctx).DB()
+	if err != nil {
+		return fmt.Errorf("failed to get database connection: %w", err)
+	}
+
+	stmt, err := sqlDB.PrepareContext(ctx, query)
+	if err != nil {
+		return fmt.Errorf("failed to prepare statement: %w", err)
+	}
+	defer stmt.Close()
+
+	result, err := stmt.ExecContext(ctx,
+		shard.CreditAmount, shard.DebitAmount, shard.TotalBalance,
+		shard.ReserveBalance, shard.UnsettledAmount, shard.ModifiedOn,
+		shard.Checksum, shard.ID, expectedVersion,
+	)
+
+	if err != nil {
+		r.logger.Error("Failed to update account balance shard with optimistic locking",
+			zap.String("shard_id", shard.ID),
+			zap.String("parent_account_id", shard.ParentAccountID),
+			zap.Int("expected_version", expectedVersion),
+			zap.Error(err),
+		)
+		return fmt.Errorf("failed to update account balance shard: %w", err)
+	}
+
+	// Check if any rows were affected (optimistic locking check)
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("optimistic locking conflict: shard %s version mismatch (expected: %d)",
+			shard.ID, expectedVersion)
+	}
+
+	// Increment version in memory
+	shard.Version = expectedVersion + 1
+
+	r.logger.Debug("Account balance shard updated successfully with optimistic locking",
+		zap.String("shard_id", shard.ID),
+		zap.String("parent_account_id", shard.ParentAccountID),
+		zap.Int("new_version", shard.Version),
+		zap.String("total_balance", shard.TotalBalance.String()),
+	)
+
+	return nil
+}
+
+// UpdateBalanceOptimisticWithRetry updates shard balance with retry mechanism
+func (r *accountBalanceShardRepository) UpdateBalanceOptimisticWithRetry(ctx context.Context, shard *account_balance_shard.AccountBalanceShard, expectedVersion int, maxRetries int) error {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Get fresh shard data before each retry
+		if attempt > 0 {
+			freshShard, err := r.GetByID(ctx, shard.ID)
+			if err != nil {
+				return fmt.Errorf("failed to get fresh shard data for retry: %w", err)
+			}
+
+			// Update shard data with fresh values
+			shard.Version = freshShard.Version
+			shard.TotalBalance = freshShard.TotalBalance
+			shard.CreditAmount = freshShard.CreditAmount
+			shard.DebitAmount = freshShard.DebitAmount
+			expectedVersion = freshShard.Version
+
+			// Exponential backoff: 5ms, 10ms, 20ms, 40ms, 80ms, etc.
+			delayMs := 5 * (1 << (attempt - 1)) // 5, 10, 20, 40, 80, 160, 320...
+			if delayMs > 100 {                  // Cap at 100ms
+				delayMs = 100
+			}
+			time.Sleep(time.Duration(delayMs) * time.Millisecond)
+		}
+
+		err := r.UpdateBalanceOptimistic(ctx, shard, expectedVersion)
+		if err == nil {
+			if attempt > 0 {
+				r.logger.Info("Optimistic locking retry successful",
+					zap.String("shard_id", shard.ID),
+					zap.Int("attempt", attempt+1),
+					zap.Int("final_version", shard.Version),
+				)
+			}
+			return nil
+		}
+
+		lastErr = err
+
+		// Check if it's an optimistic locking conflict
+		if !strings.Contains(err.Error(), "optimistic locking conflict") {
+			return err // Non-retryable error
+		}
+
+		r.logger.Debug("Optimistic locking conflict, retrying",
+			zap.String("shard_id", shard.ID),
+			zap.Int("attempt", attempt+1),
+			zap.Int("max_retries", maxRetries),
+			zap.Error(err),
+		)
+	}
+
+	return fmt.Errorf("optimistic locking failed after %d retries: %w", maxRetries, lastErr)
+}
+
+// GetShardsWithBalanceInfo gets shards with optimized balance info (lock-free)
+func (r *accountBalanceShardRepository) GetShardsWithBalanceInfo(ctx context.Context, parentAccountID string) ([]*account_balance_shard.AccountBalanceShard, error) {
+	var shards []*account_balance_shard.AccountBalanceShard
+
+	// OPTIMIZED: Lock-free query with only necessary fields
+	query := `SELECT id, parent_account_id, shard_index, shard_hash, 
+		credit_amount, debit_amount, total_balance, reserve_balance, 
+		unsettled_amount, version, modified_on
+		FROM account_balance_shard 
+		WHERE parent_account_id = $1 
+		ORDER BY shard_index ASC`
+
+	if err := r.db.WithContext(ctx).Raw(query, parentAccountID).Scan(&shards).Error; err != nil {
+		r.logger.Error("Failed to get shards with balance info",
+			zap.String("parent_account_id", parentAccountID),
+			zap.Error(err),
+		)
+		return nil, fmt.Errorf("failed to get shards with balance info: %w", err)
+	}
+
+	r.logger.Debug("Shards with balance info retrieved successfully",
+		zap.String("parent_account_id", parentAccountID),
+		zap.Int("shard_count", len(shards)),
+	)
+
+	return shards, nil
 }

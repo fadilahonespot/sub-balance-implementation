@@ -21,6 +21,7 @@ type AccountBalanceShard struct {
 	CreatedOn       time.Time       `json:"created_on" gorm:"column:created_on;autoCreateTime"`
 	ModifiedOn      time.Time       `json:"modified_on" gorm:"column:modified_on;autoUpdateTime"`
 	Checksum        string          `json:"checksum" gorm:"column:checksum"`
+	Version         int             `json:"version" gorm:"column:version;default:1"`
 }
 
 // TableName overrides the default table name
@@ -47,6 +48,11 @@ type Repository interface {
 	GetShardByIndexForUpdate(ctx context.Context, parentAccountID string, shardIndex int) (*AccountBalanceShard, error)
 	CalculateTotalBalance(ctx context.Context, parentAccountID string) (decimal.Decimal, error)
 	ValidateConsistency(ctx context.Context, parentAccountID string) (*ConsistencyReport, error)
+
+	// Optimistic locking methods (NEW)
+	UpdateBalanceOptimistic(ctx context.Context, shard *AccountBalanceShard, expectedVersion int) error
+	UpdateBalanceOptimisticWithRetry(ctx context.Context, shard *AccountBalanceShard, expectedVersion int, maxRetries int) error
+	GetShardsWithBalanceInfo(ctx context.Context, parentAccountID string) ([]*AccountBalanceShard, error)
 }
 
 // Usecase interface for account balance shard business logic

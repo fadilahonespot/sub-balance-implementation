@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	"sub-balance-implementation/internal/domain/account"
@@ -155,7 +157,6 @@ func (u *usecase) GetSubBalanceInfo(ctx context.Context, accountID string) (*sub
 		ShardCount:    acc.SubBalanceShardCount,
 		TotalBalance:  decimal.Zero,
 		UseSubBalance: acc.UseSubBalance,
-		HotAccount:    acc.HotAccount,
 		Shards:        make([]*sub_balance_manager.ShardInfo, 0),
 		CreatedAt:     acc.CreatedOn,
 	}
@@ -196,9 +197,231 @@ func (u *usecase) GetSubBalanceInfo(ctx context.Context, accountID string) (*sub
 	return info, nil
 }
 
-// SelectShardForDebit selects the best shard for a debit operation using consistent hashing
+// SelectShardForDebit selects the best shard for a debit operation using PRE-BALANCE TRANSFER strategy
 func (u *usecase) SelectShardForDebit(ctx context.Context, accountID string, amount decimal.Decimal) (*sub_balance_manager.ShardSelectionResult, error) {
-	u.logger.Info("Selecting shard for debit with consistent hashing",
+	u.logger.Info("Selecting shard for debit with PRE-BALANCE TRANSFER strategy",
+		zap.String("account_id", accountID),
+		zap.String("amount", amount.String()),
+	)
+
+	// Step 1: Find shard with sufficient balance OR prepare for pre-transfer
+	result, err := u.selectShardWithPreBalanceTransfer(ctx, accountID, amount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to select shard with pre-balance transfer: %w", err)
+	}
+
+	u.logger.Info("Shard selection with pre-balance transfer completed",
+		zap.String("account_id", accountID),
+		zap.String("selected_shard_id", result.SelectedShardID),
+		zap.String("strategy", string(result.Strategy)),
+		zap.String("reason", result.Reason),
+	)
+
+	return result, nil
+}
+
+// selectShardWithPreBalanceTransfer implements PRE-BALANCE TRANSFER strategy
+func (u *usecase) selectShardWithPreBalanceTransfer(ctx context.Context, accountID string, amount decimal.Decimal) (*sub_balance_manager.ShardSelectionResult, error) {
+	// Get all shards for the account (read-only, no locks)
+	shards, err := u.accountBalanceShardRepo.GetByParentAccountID(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shards: %w", err)
+	}
+
+	if len(shards) == 0 {
+		return nil, fmt.Errorf("no shards found for account %s", accountID)
+	}
+
+	// Sort shards by balance (highest first) to find best candidates
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].TotalBalance.GreaterThan(shards[j].TotalBalance)
+	})
+
+	// Strategy 1: Find shard with sufficient balance (no transfer needed)
+	for _, shard := range shards {
+		if shard.TotalBalance.GreaterThanOrEqual(amount) {
+			u.logger.Info("Found shard with sufficient balance, no transfer needed",
+				zap.String("shard_id", shard.ID),
+				zap.String("balance", shard.TotalBalance.String()),
+				zap.String("amount", amount.String()),
+			)
+
+			return &sub_balance_manager.ShardSelectionResult{
+				SelectedShardID: shard.ID,
+				ShardIndex:      shard.ShardIndex,
+				ShardHash:       shard.ShardHash,
+				CurrentBalance:  shard.TotalBalance,
+				Strategy:        sub_balance_manager.StrategyHighestBalance,
+				Reason:          "Selected shard with sufficient balance, no pre-transfer needed",
+			}, nil
+		}
+	}
+
+	// Strategy 2: Pre-transfer balance to make one shard sufficient
+	u.logger.Info("No shard has sufficient balance, implementing pre-balance transfer",
+		zap.String("account_id", accountID),
+		zap.String("amount", amount.String()),
+	)
+
+	// Select target shard (highest balance shard)
+	targetShard := shards[0]
+	remainingNeeded := amount.Sub(targetShard.TotalBalance)
+
+	u.logger.Info("Pre-transfer planning",
+		zap.String("target_shard_id", targetShard.ID),
+		zap.String("target_current_balance", targetShard.TotalBalance.String()),
+		zap.String("remaining_needed", remainingNeeded.String()),
+	)
+
+	// Calculate total available balance across all shards
+	totalAvailable := decimal.Zero
+	for _, shard := range shards {
+		totalAvailable = totalAvailable.Add(shard.TotalBalance)
+	}
+
+	if totalAvailable.LessThan(amount) {
+		return nil, fmt.Errorf("insufficient total balance: available=%s, required=%s",
+			totalAvailable.String(), amount.String())
+	}
+
+	// Execute pre-balance transfer (lock-free, optimistic approach)
+	err = u.executePreBalanceTransfer(ctx, shards, targetShard.ID, remainingNeeded)
+	if err != nil {
+		return nil, fmt.Errorf("pre-balance transfer failed: %w", err)
+	}
+
+	// Return target shard with updated balance
+	newTargetBalance := amount // After pre-transfer, target shard will have exactly the needed amount
+
+	return &sub_balance_manager.ShardSelectionResult{
+		SelectedShardID: targetShard.ID,
+		ShardIndex:      targetShard.ShardIndex,
+		ShardHash:       targetShard.ShardHash,
+		CurrentBalance:  newTargetBalance,
+		Strategy:        sub_balance_manager.StrategyPreBalanceTransfer,
+		Reason:          fmt.Sprintf("Pre-transferred %s to target shard for sufficient balance", remainingNeeded.String()),
+	}, nil
+}
+
+// executePreBalanceTransfer performs lock-free pre-balance transfer between shards
+func (u *usecase) executePreBalanceTransfer(ctx context.Context, shards []*account_balance_shard.AccountBalanceShard, targetShardID string, amount decimal.Decimal) error {
+	u.logger.Info("Executing pre-balance transfer",
+		zap.String("target_shard_id", targetShardID),
+		zap.String("amount", amount.String()),
+	)
+
+	// Use optimistic approach with retry mechanism
+	maxRetries := 3
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		err := u.attemptPreBalanceTransfer(ctx, shards, targetShardID, amount)
+		if err == nil {
+			u.logger.Info("Pre-balance transfer completed successfully",
+				zap.String("target_shard_id", targetShardID),
+				zap.Int("attempt", attempt),
+			)
+			return nil
+		}
+
+		u.logger.Warn("Pre-balance transfer attempt failed, retrying",
+			zap.String("target_shard_id", targetShardID),
+			zap.Int("attempt", attempt),
+			zap.Int("max_retries", maxRetries),
+			zap.Error(err),
+		)
+
+		if attempt < maxRetries {
+			// Brief delay before retry
+			time.Sleep(time.Duration(attempt) * 10 * time.Millisecond)
+		}
+	}
+
+	return fmt.Errorf("pre-balance transfer failed after %d attempts", maxRetries)
+}
+
+// attemptPreBalanceTransfer attempts a single pre-balance transfer
+func (u *usecase) attemptPreBalanceTransfer(ctx context.Context, shards []*account_balance_shard.AccountBalanceShard, targetShardID string, amount decimal.Decimal) error {
+	return u.executeInTransaction(ctx, func(txCtx context.Context) error {
+		// Get fresh shard data
+		freshShards, err := u.accountBalanceShardRepo.GetByParentAccountID(txCtx, shards[0].ParentAccountID)
+		if err != nil {
+			return fmt.Errorf("failed to get fresh shard data: %w", err)
+		}
+
+		// Sort by balance (highest first)
+		sort.Slice(freshShards, func(i, j int) bool {
+			return freshShards[i].TotalBalance.GreaterThan(freshShards[j].TotalBalance)
+		})
+
+		// Find target shard
+		var targetShard *account_balance_shard.AccountBalanceShard
+		for _, shard := range freshShards {
+			if shard.ID == targetShardID {
+				targetShard = shard
+				break
+			}
+		}
+
+		if targetShard == nil {
+			return fmt.Errorf("target shard not found: %s", targetShardID)
+		}
+
+		remainingAmount := amount
+		var shardsToUpdate []*account_balance_shard.AccountBalanceShard
+
+		// Transfer from other shards to target
+		for _, shard := range freshShards {
+			if shard.ID == targetShardID {
+				continue // Skip target shard
+			}
+
+			if remainingAmount.LessThanOrEqual(decimal.Zero) {
+				break
+			}
+
+			transferAmount := remainingAmount
+			if shard.TotalBalance.LessThan(transferAmount) {
+				transferAmount = shard.TotalBalance
+			}
+
+			if transferAmount.GreaterThan(decimal.Zero) {
+				// Update source shard
+				shard.TotalBalance = shard.TotalBalance.Sub(transferAmount)
+				shardsToUpdate = append(shardsToUpdate, shard)
+				remainingAmount = remainingAmount.Sub(transferAmount)
+
+				u.logger.Info("Pre-transfer from source shard",
+					zap.String("source_shard_id", shard.ID),
+					zap.String("transfer_amount", transferAmount.String()),
+					zap.String("remaining_balance", shard.TotalBalance.String()),
+				)
+			}
+		}
+
+		// Update target shard
+		targetShard.TotalBalance = targetShard.TotalBalance.Add(amount.Sub(remainingAmount))
+		shardsToUpdate = append(shardsToUpdate, targetShard)
+
+		u.logger.Info("Pre-transfer to target shard",
+			zap.String("target_shard_id", targetShard.ID),
+			zap.String("added_amount", amount.Sub(remainingAmount).String()),
+			zap.String("new_balance", targetShard.TotalBalance.String()),
+		)
+
+		// Save all changes
+		if len(shardsToUpdate) > 0 {
+			err = u.accountBalanceShardRepo.UpdateBalances(txCtx, shardsToUpdate)
+			if err != nil {
+				return fmt.Errorf("failed to update shard balances: %w", err)
+			}
+		}
+
+		return nil
+	})
+}
+
+// selectShardForDebitSequential provides fallback sequential shard selection
+func (u *usecase) selectShardForDebitSequential(ctx context.Context, accountID string, amount decimal.Decimal) (*sub_balance_manager.ShardSelectionResult, error) {
+	u.logger.Info("Using sequential shard selection as fallback",
 		zap.String("account_id", accountID),
 		zap.String("amount", amount.String()),
 	)
@@ -213,37 +436,48 @@ func (u *usecase) SelectShardForDebit(ctx context.Context, accountID string, amo
 		return nil, fmt.Errorf("no shards found for account %s", accountID)
 	}
 
-	// Use consistent hashing for load balancing
-	// Generate hash from account ID + current timestamp for better distribution
-	hashInput := fmt.Sprintf("%s_%d", accountID, time.Now().UnixNano())
-	hash := u.generateHash(hashInput)
-	shardIndex := hash % uint32(len(shards))
+	// Sort shards by balance (descending) for optimal selection
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].TotalBalance.GreaterThan(shards[j].TotalBalance)
+	})
 
-	// Try the selected shard first
-	selectedShard := shards[shardIndex]
-	if selectedShard.TotalBalance.GreaterThanOrEqual(amount) {
+	// Try to acquire lock on shards with sufficient balance (sorted by balance)
+	availableShards := make([]*account_balance_shard.AccountBalanceShard, 0)
+	for _, shard := range shards {
+		if shard.TotalBalance.GreaterThanOrEqual(amount) {
+			// Try to acquire lock with very short timeout (non-blocking)
+			lockInfo, err := u.advisoryLockManager.AcquireShardAdvisoryLock(ctx, shard.ID, 10) // 10ms timeout for fast fallback
+			if err == nil && lockInfo.IsAcquired {
+				// SUCCESS! Lock acquired, this shard is available
+				return &sub_balance_manager.ShardSelectionResult{
+					SelectedShardID: shard.ID,
+					ShardIndex:      shard.ShardIndex,
+					ShardHash:       shard.ShardHash,
+					CurrentBalance:  shard.TotalBalance,
+					Strategy:        sub_balance_manager.StrategyBalanceBased,
+					Reason:          fmt.Sprintf("Selected available shard %d with balance %s (sequential fallback)", shard.ShardIndex, shard.TotalBalance.String()),
+				}, nil
+			}
+			// Lock failed, add to available list for fallback
+			availableShards = append(availableShards, shard)
+		}
+	}
+
+	// If no immediate lock available, use consistent hashing for load balancing
+	if len(availableShards) > 0 {
+		hashInput := fmt.Sprintf("%s_%d", accountID, time.Now().UnixNano())
+		hash := u.generateHash(hashInput)
+		shardIndex := hash % uint32(len(availableShards))
+		selectedShard := availableShards[shardIndex]
+
 		return &sub_balance_manager.ShardSelectionResult{
 			SelectedShardID: selectedShard.ID,
 			ShardIndex:      selectedShard.ShardIndex,
 			ShardHash:       selectedShard.ShardHash,
 			CurrentBalance:  selectedShard.TotalBalance,
 			Strategy:        sub_balance_manager.StrategyConsistentHashing,
-			Reason:          "Selected shard using consistent hashing",
+			Reason:          fmt.Sprintf("Selected shard %d using consistent hashing (will attempt lock)", selectedShard.ShardIndex),
 		}, nil
-	}
-
-	// If selected shard doesn't have enough balance, find any shard with sufficient balance
-	for _, shard := range shards {
-		if shard.TotalBalance.GreaterThanOrEqual(amount) {
-			return &sub_balance_manager.ShardSelectionResult{
-				SelectedShardID: shard.ID,
-				ShardIndex:      shard.ShardIndex,
-				ShardHash:       shard.ShardHash,
-				CurrentBalance:  shard.TotalBalance,
-				Strategy:        sub_balance_manager.StrategyBalanceBased,
-				Reason:          "Selected shard with sufficient balance after consistent hashing failed",
-			}, nil
-		}
 	}
 
 	return nil, fmt.Errorf("insufficient balance across all shards for account %s", accountID)
@@ -424,27 +658,26 @@ func (u *usecase) ProcessDebitTransaction(ctx context.Context, req sub_balance_m
 		}, nil
 	}
 
-	// Acquire shard-level lock for the selected shard (NO account-level lock)
-	shardLockInfo, err := u.advisoryLockManager.AcquireShardAdvisoryLock(ctx, shardSelection.SelectedShardID, 0)
-	if err != nil {
-		return nil, fmt.Errorf("failed to acquire shard lock: %w", err)
-	}
-	if !shardLockInfo.IsAcquired {
-		return nil, fmt.Errorf("failed to acquire shard lock for shard %s", shardSelection.SelectedShardID)
-	}
+	// OPTIMIZED: Single shard lock only (no advisory lock needed after pre-balance transfer)
+	u.logger.Info("Processing debit with SINGLE SHARD LOCK ONLY (pre-balance transfer completed)",
+		zap.String("shard_id", shardSelection.SelectedShardID),
+		zap.String("strategy", string(shardSelection.Strategy)),
+		zap.String("reason", shardSelection.Reason),
+	)
 
-	// Start database transaction with shard-level locking only
+	// Start database transaction with SINGLE SHARD ROW LOCK ONLY
 	var result *sub_balance_manager.TransactionResult
 	err = u.executeInTransaction(ctx, func(txCtx context.Context) error {
-		// Get shard for update
+		// Get shard for update (ROW LOCK ONLY - no advisory lock)
 		shard, err := u.accountBalanceShardRepo.GetByIDForUpdate(txCtx, shardSelection.SelectedShardID)
 		if err != nil {
 			return fmt.Errorf("failed to get shard for update: %w", err)
 		}
 
-		// Validate sufficient balance
+		// Validate sufficient balance (should be sufficient after pre-balance transfer)
 		if shard.TotalBalance.LessThan(req.Amount) {
-			return fmt.Errorf("insufficient balance in shard %s: %s", shard.ID, shard.TotalBalance.String())
+			return fmt.Errorf("insufficient balance in shard %s: %s (pre-balance transfer may have failed)",
+				shard.ID, shard.TotalBalance.String())
 		}
 
 		// Update shard balance
@@ -514,9 +747,11 @@ func (u *usecase) ProcessDebitTransaction(ctx context.Context, req sub_balance_m
 		return nil, err
 	}
 
-	u.logger.Info("Debit transaction processed successfully with TRUE shard-level locking",
+	u.logger.Info("Debit transaction processed successfully with SINGLE SHARD LOCK ONLY (pre-balance transfer strategy)",
 		zap.String("transaction_id", req.TransactionID),
 		zap.String("shard_id", result.SelectedShardID),
+		zap.String("strategy", string(shardSelection.Strategy)),
+		zap.String("reason", shardSelection.Reason),
 	)
 
 	return result, nil
@@ -963,11 +1198,459 @@ func (u *usecase) OptimizeShardDistribution(ctx context.Context, accountID strin
 	return u.RebalanceShards(ctx, accountID)
 }
 
+// txKey is used as a context key for database transaction
+type txKey string
+
+const txKeyValue txKey = "tx"
+
+// ParallelShardResult represents the result of parallel shard lock acquisition
+type ParallelShardResult struct {
+	Shard      *account_balance_shard.AccountBalanceShard
+	LockInfo   *postgres.AdvisoryLockInfo
+	Error      error
+	Success    bool
+	Index      int
+	AcquiredAt time.Time
+}
+
+// ParallelShardSelectionConfig configures parallel shard selection behavior
+type ParallelShardSelectionConfig struct {
+	MaxConcurrency   int           // Maximum number of concurrent lock attempts
+	LockTimeout      time.Duration // Timeout for each lock attempt
+	EarlyReturn      bool          // Return immediately when first lock is acquired
+	SortByBalance    bool          // Sort shards by balance before processing
+	BalanceThreshold float64       // Minimum balance ratio to consider shard
+}
+
+// selectShardForDebitParallel performs parallel shard selection with concurrent lock acquisition
+func (u *usecase) selectShardForDebitParallel(ctx context.Context, accountID string, amount decimal.Decimal, config ParallelShardSelectionConfig) (*sub_balance_manager.ShardSelectionResult, error) {
+	u.logger.Info("Selecting shard for debit with parallel lock acquisition",
+		zap.String("account_id", accountID),
+		zap.String("amount", amount.String()),
+		zap.Int("max_concurrency", config.MaxConcurrency),
+		zap.Duration("lock_timeout", config.LockTimeout),
+	)
+
+	// Get shards
+	shards, err := u.accountBalanceShardRepo.GetByParentAccountID(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shards: %w", err)
+	}
+
+	if len(shards) == 0 {
+		return nil, fmt.Errorf("no shards found for account %s", accountID)
+	}
+
+	// Filter shards with sufficient balance
+	eligibleShards := make([]*account_balance_shard.AccountBalanceShard, 0)
+	for _, shard := range shards {
+		if shard.TotalBalance.GreaterThanOrEqual(amount) {
+			eligibleShards = append(eligibleShards, shard)
+		}
+	}
+
+	if len(eligibleShards) == 0 {
+		return nil, fmt.Errorf("insufficient balance across all shards for account %s", accountID)
+	}
+
+	// Sort shards by balance if configured
+	if config.SortByBalance {
+		sort.Slice(eligibleShards, func(i, j int) bool {
+			return eligibleShards[i].TotalBalance.GreaterThan(eligibleShards[j].TotalBalance)
+		})
+	}
+
+	// Limit concurrency to prevent overwhelming the system
+	if config.MaxConcurrency <= 0 {
+		config.MaxConcurrency = 5 // Default concurrency
+	}
+	if len(eligibleShards) < config.MaxConcurrency {
+		config.MaxConcurrency = len(eligibleShards)
+	}
+
+	// Channel to receive results
+	resultChan := make(chan ParallelShardResult, config.MaxConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var selectedResult *ParallelShardResult
+	var firstSuccess time.Time
+
+	// Start goroutines for parallel lock acquisition
+	for i := 0; i < config.MaxConcurrency; i++ {
+		wg.Add(1)
+		go func(shardIndex int) {
+			defer wg.Done()
+
+			shard := eligibleShards[shardIndex]
+
+			// Try to acquire lock
+			lockInfo, err := u.advisoryLockManager.AcquireShardAdvisoryLock(ctx, shard.ID, config.LockTimeout)
+			acquiredAt := time.Now()
+
+			result := ParallelShardResult{
+				Shard:      shard,
+				LockInfo:   lockInfo,
+				Error:      err,
+				Success:    err == nil && lockInfo != nil && lockInfo.IsAcquired,
+				Index:      shardIndex,
+				AcquiredAt: acquiredAt,
+			}
+
+			// If early return is enabled and this is the first success, store it
+			if config.EarlyReturn && result.Success {
+				mu.Lock()
+				if selectedResult == nil || firstSuccess.IsZero() || acquiredAt.Before(firstSuccess) {
+					selectedResult = &result
+					firstSuccess = acquiredAt
+				}
+				mu.Unlock()
+			}
+
+			resultChan <- result
+		}(i)
+	}
+
+	// Close result channel when all goroutines complete
+	go func() {
+		wg.Wait()
+		close(resultChan)
+	}()
+
+	// Collect results
+	var results []ParallelShardResult
+	var successfulResults []ParallelShardResult
+
+	for result := range resultChan {
+		results = append(results, result)
+		if result.Success {
+			successfulResults = append(successfulResults, result)
+
+			// If early return is enabled and we have a selected result, use it
+			if config.EarlyReturn && selectedResult != nil && result.Shard.ID == selectedResult.Shard.ID {
+				return u.convertParallelResultToShardSelection(result), nil
+			}
+		}
+	}
+
+	// If no successful results, return error
+	if len(successfulResults) == 0 {
+		u.logger.Warn("No shards could be locked in parallel",
+			zap.String("account_id", accountID),
+			zap.Int("total_attempts", len(results)),
+			zap.Duration("lock_timeout", config.LockTimeout),
+		)
+		return nil, fmt.Errorf("all shard lock attempts failed for account %s", accountID)
+	}
+
+	// Select the best successful result (first one by balance or fastest)
+	var bestResult ParallelShardResult
+	if config.SortByBalance {
+		// Select the one with highest balance
+		bestResult = successfulResults[0]
+		for _, result := range successfulResults[1:] {
+			if result.Shard.TotalBalance.GreaterThan(bestResult.Shard.TotalBalance) {
+				bestResult = result
+			}
+		}
+	} else {
+		// Select the fastest one
+		bestResult = successfulResults[0]
+		for _, result := range successfulResults[1:] {
+			if result.AcquiredAt.Before(bestResult.AcquiredAt) {
+				bestResult = result
+			}
+		}
+	}
+
+	// Release locks for unsuccessful attempts
+	for _, result := range results {
+		if result.Success && result.Shard.ID != bestResult.Shard.ID {
+			u.advisoryLockManager.ReleaseAdvisoryLock(ctx, result.Shard.ID)
+		}
+	}
+
+	u.logger.Info("Parallel shard selection completed",
+		zap.String("account_id", accountID),
+		zap.String("selected_shard_id", bestResult.Shard.ID),
+		zap.Int("successful_attempts", len(successfulResults)),
+		zap.Int("total_attempts", len(results)),
+		zap.Duration("acquisition_time", time.Since(bestResult.AcquiredAt)),
+	)
+
+	return u.convertParallelResultToShardSelection(bestResult), nil
+}
+
+// convertParallelResultToShardSelection converts ParallelShardResult to ShardSelectionResult
+func (u *usecase) convertParallelResultToShardSelection(result ParallelShardResult) *sub_balance_manager.ShardSelectionResult {
+	return &sub_balance_manager.ShardSelectionResult{
+		SelectedShardID: result.Shard.ID,
+		ShardIndex:      result.Shard.ShardIndex,
+		ShardHash:       result.Shard.ShardHash,
+		CurrentBalance:  result.Shard.TotalBalance,
+		Strategy:        sub_balance_manager.StrategyLoadBalancing,
+		Reason:          fmt.Sprintf("Selected shard %d via parallel acquisition with balance %s", result.Shard.ShardIndex, result.Shard.TotalBalance.String()),
+	}
+}
+
+// getDefaultParallelConfig returns default configuration for parallel shard selection
+func (u *usecase) getDefaultParallelConfig() ParallelShardSelectionConfig {
+	return ParallelShardSelectionConfig{
+		MaxConcurrency:   10,                    // Process up to 10 shards in parallel (increased)
+		LockTimeout:      25 * time.Millisecond, // 25ms timeout per lock (reduced for speed)
+		EarlyReturn:      true,                  // Return immediately when first lock is acquired
+		SortByBalance:    true,                  // Sort by balance for optimal selection
+		BalanceThreshold: 0.05,                  // Consider shards with at least 5% of amount (reduced)
+	}
+}
+
+// getOptimizedParallelConfig returns optimized configuration for high TPS scenarios
+func (u *usecase) getOptimizedParallelConfig() ParallelShardSelectionConfig {
+	return ParallelShardSelectionConfig{
+		MaxConcurrency:   15,                    // Process up to 15 shards in parallel (maximum)
+		LockTimeout:      15 * time.Millisecond, // 15ms timeout per lock (very fast)
+		EarlyReturn:      true,                  // Return immediately when first lock is acquired
+		SortByBalance:    true,                  // Sort by balance for optimal selection
+		BalanceThreshold: 0.02,                  // Consider shards with at least 2% of amount (very low threshold)
+	}
+}
+
 // executeInTransaction executes a function within a database transaction
 func (u *usecase) executeInTransaction(ctx context.Context, fn func(context.Context) error) error {
 	// Use GORM's transaction support for proper database transaction
 	return u.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		txCtx := context.WithValue(ctx, "tx", tx)
+		txCtx := context.WithValue(ctx, txKeyValue, tx)
 		return fn(txCtx)
 	})
+}
+
+// contains checks if a string contains a substring
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
+}
+
+// ProcessDebitTransactionOptimistic processes debit transaction using optimistic locking
+func (u *usecase) ProcessDebitTransactionOptimistic(ctx context.Context, req sub_balance_manager.ProcessTransactionRequest) (*sub_balance_manager.TransactionResult, error) {
+	u.logger.Info("Processing debit transaction with OPTIMISTIC LOCKING",
+		zap.String("transaction_id", req.TransactionID),
+		zap.String("account_id", req.AccountID),
+		zap.String("amount", req.Amount.String()),
+	)
+
+	// Step 1: Lock-free balance check
+	shards, err := u.accountBalanceShardRepo.GetShardsWithBalanceInfo(ctx, req.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get shards with balance info: %w", err)
+	}
+
+	if len(shards) == 0 {
+		return nil, fmt.Errorf("no shards found for account %s", req.AccountID)
+	}
+
+	// Step 2: Find shard with sufficient balance using round-robin distribution (lock-free)
+	var selectedShard *account_balance_shard.AccountBalanceShard
+	var eligibleShards []*account_balance_shard.AccountBalanceShard
+
+	// Collect all shards with sufficient balance
+	for _, shard := range shards {
+		if shard.TotalBalance.GreaterThanOrEqual(req.Amount) {
+			eligibleShards = append(eligibleShards, shard)
+		}
+	}
+
+	// Use round-robin selection based on transaction ID hash for load distribution
+	if len(eligibleShards) > 0 {
+		// Use transaction ID to create deterministic but distributed selection
+		hash := u.generateHash(req.TransactionID)
+		selectedIndex := int(hash % uint32(len(eligibleShards)))
+		selectedShard = eligibleShards[selectedIndex]
+
+		u.logger.Debug("Shard selected using round-robin distribution",
+			zap.String("transaction_id", req.TransactionID),
+			zap.String("selected_shard_id", selectedShard.ID),
+			zap.Int("shard_index", selectedShard.ShardIndex),
+			zap.Int("eligible_shards_count", len(eligibleShards)),
+			zap.String("selected_balance", selectedShard.TotalBalance.String()),
+		)
+	}
+
+	// Step 3: If no single shard has sufficient balance, try cross-shard
+	if selectedShard == nil {
+		u.logger.Info("No single shard has sufficient balance, attempting cross-shard with optimistic locking",
+			zap.String("account_id", req.AccountID),
+			zap.String("amount", req.Amount.String()),
+		)
+		return u.processCrossShardDebitOptimistic(ctx, req, shards)
+	}
+
+	// Step 4: Process single shard debit with optimistic locking
+	return u.processSingleShardDebitOptimistic(ctx, req, selectedShard)
+}
+
+// processSingleShardDebitOptimistic processes debit on single shard with optimistic locking
+func (u *usecase) processSingleShardDebitOptimistic(ctx context.Context, req sub_balance_manager.ProcessTransactionRequest, shard *account_balance_shard.AccountBalanceShard) (*sub_balance_manager.TransactionResult, error) {
+	maxRetries := 10 // Increased from 3 to 10 for better conflict resolution
+
+	// Prepare updated shard data
+	previousBalance := shard.TotalBalance
+	newBalance := shard.TotalBalance.Sub(req.Amount)
+
+	updatedShard := &account_balance_shard.AccountBalanceShard{
+		ID:              shard.ID,
+		ParentAccountID: shard.ParentAccountID,
+		ShardIndex:      shard.ShardIndex,
+		ShardHash:       shard.ShardHash,
+		CreditAmount:    shard.CreditAmount,
+		DebitAmount:     shard.DebitAmount.Add(req.Amount),
+		TotalBalance:    newBalance,
+		ReserveBalance:  shard.ReserveBalance,
+		UnsettledAmount: shard.UnsettledAmount,
+		Version:         shard.Version,
+	}
+
+	// Try optimistic locking with retry
+	err := u.accountBalanceShardRepo.UpdateBalanceOptimisticWithRetry(ctx, updatedShard, shard.Version, maxRetries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update shard balance with optimistic locking: %w", err)
+	}
+
+	// Create transaction record
+	transaction := &transaction.Transaction{
+		ID:              uuid.New().String(),
+		TransactionID:   req.TransactionID,
+		ParentAccountID: req.AccountID,
+		ShardID:         shard.ID,
+		ShardIndex:      shard.ShardIndex,
+		TransactionType: string(transaction.TransactionTypeDebit),
+		Amount:          req.Amount,
+		PreviousBalance: previousBalance,
+		NewBalance:      newBalance,
+		Description:     req.Description,
+		Status:          string(transaction.TransactionStatusCompleted),
+		Metadata:        u.convertMetadataToString(req.Metadata),
+		Version:         1,
+		RetryCount:      0, // Will be updated if retries occurred
+	}
+
+	if err := u.transactionRepo.Create(ctx, transaction); err != nil {
+		return nil, fmt.Errorf("failed to create transaction record: %w", err)
+	}
+
+	// Get total balance (lock-free)
+	totalBalance, err := u.accountBalanceShardRepo.CalculateTotalBalance(ctx, req.AccountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to calculate total balance: %w", err)
+	}
+
+	result := &sub_balance_manager.TransactionResult{
+		TransactionID:   req.TransactionID,
+		AccountID:       req.AccountID,
+		Amount:          req.Amount,
+		TransactionType: req.TransactionType,
+		SelectedShardID: shard.ID,
+		ShardIndex:      shard.ShardIndex,
+		PreviousBalance: previousBalance,
+		NewBalance:      newBalance,
+		TotalBalance:    totalBalance,
+		ProcessedAt:     time.Now(),
+	}
+
+	u.logger.Info("Debit transaction processed successfully with OPTIMISTIC LOCKING",
+		zap.String("transaction_id", req.TransactionID),
+		zap.String("shard_id", shard.ID),
+		zap.String("strategy", "optimistic_single_shard"),
+		zap.String("reason", "Selected shard with sufficient balance, optimistic locking applied"),
+	)
+
+	return result, nil
+}
+
+// processCrossShardDebitOptimistic processes cross-shard debit with optimistic locking
+func (u *usecase) processCrossShardDebitOptimistic(ctx context.Context, req sub_balance_manager.ProcessTransactionRequest, shards []*account_balance_shard.AccountBalanceShard) (*sub_balance_manager.TransactionResult, error) {
+	// Calculate total available balance
+	totalAvailableBalance := decimal.Zero
+	for _, shard := range shards {
+		totalAvailableBalance = totalAvailableBalance.Add(shard.TotalBalance)
+	}
+
+	if totalAvailableBalance.LessThan(req.Amount) {
+		return nil, fmt.Errorf("insufficient total balance: available %s, required %s",
+			totalAvailableBalance.String(), req.Amount.String())
+	}
+
+	// Find target shard (highest balance)
+	var targetShard *account_balance_shard.AccountBalanceShard
+	maxBalance := decimal.Zero
+	for _, shard := range shards {
+		if shard.TotalBalance.GreaterThan(maxBalance) {
+			maxBalance = shard.TotalBalance
+			targetShard = shard
+		}
+	}
+
+	if targetShard == nil {
+		return nil, fmt.Errorf("no target shard found")
+	}
+
+	// Transfer balance to target shard using optimistic locking
+	remainingAmount := req.Amount.Sub(targetShard.TotalBalance)
+
+	for _, shard := range shards {
+		if shard.ID == targetShard.ID {
+			continue // Skip target shard
+		}
+
+		if remainingAmount.LessThanOrEqual(decimal.Zero) {
+			break // Enough balance transferred
+		}
+
+		transferAmount := remainingAmount
+		if transferAmount.GreaterThan(shard.TotalBalance) {
+			transferAmount = shard.TotalBalance
+		}
+
+		// Update source shard (debit)
+		sourceUpdated := &account_balance_shard.AccountBalanceShard{
+			ID:              shard.ID,
+			ParentAccountID: shard.ParentAccountID,
+			ShardIndex:      shard.ShardIndex,
+			ShardHash:       shard.ShardHash,
+			CreditAmount:    shard.CreditAmount,
+			DebitAmount:     shard.DebitAmount,
+			TotalBalance:    shard.TotalBalance.Sub(transferAmount),
+			ReserveBalance:  shard.ReserveBalance,
+			UnsettledAmount: shard.UnsettledAmount,
+			Version:         shard.Version,
+		}
+
+		err := u.accountBalanceShardRepo.UpdateBalanceOptimisticWithRetry(ctx, sourceUpdated, shard.Version, 10)
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer balance from shard %s: %w", shard.ID, err)
+		}
+
+		// Update target shard (credit)
+		targetUpdated := &account_balance_shard.AccountBalanceShard{
+			ID:              targetShard.ID,
+			ParentAccountID: targetShard.ParentAccountID,
+			ShardIndex:      targetShard.ShardIndex,
+			ShardHash:       targetShard.ShardHash,
+			CreditAmount:    targetShard.CreditAmount,
+			DebitAmount:     targetShard.DebitAmount,
+			TotalBalance:    targetShard.TotalBalance.Add(transferAmount),
+			ReserveBalance:  targetShard.ReserveBalance,
+			UnsettledAmount: targetShard.UnsettledAmount,
+			Version:         targetShard.Version,
+		}
+
+		err = u.accountBalanceShardRepo.UpdateBalanceOptimisticWithRetry(ctx, targetUpdated, targetShard.Version, 10)
+		if err != nil {
+			return nil, fmt.Errorf("failed to transfer balance to shard %s: %w", targetShard.ID, err)
+		}
+
+		// Update target shard for next iteration
+		targetShard = targetUpdated
+		remainingAmount = remainingAmount.Sub(transferAmount)
+	}
+
+	// Now process the debit on target shard
+	return u.processSingleShardDebitOptimistic(ctx, req, targetShard)
 }

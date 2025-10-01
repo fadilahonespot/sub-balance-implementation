@@ -23,7 +23,9 @@ type Transaction struct {
 	CreatedOn       time.Time       `json:"created_on" gorm:"column:created_on;autoCreateTime"`
 	ModifiedOn      time.Time       `json:"modified_on" gorm:"column:modified_on;autoUpdateTime"`
 	Checksum        string          `json:"checksum" gorm:"column:checksum"`
-	Metadata        string          `json:"metadata" gorm:"column:metadata;type:jsonb"`
+	Metadata        string          `json:"metadata" gorm:"column:metadata;type:jsonb;serializer:json"`
+	Version         int             `json:"version" gorm:"column:version;default:1"`
+	RetryCount      int             `json:"retry_count" gorm:"column:retry_count;default:0"`
 }
 
 // TableName overrides the default table name

@@ -1,27 +1,37 @@
 server:
+  host: "0.0.0.0"
   port: 8080
-  read_timeout: 30s
-  write_timeout: 30s
+  read_timeout: 60s
+  write_timeout: 60s
+  idle_timeout: 300s
 
 database:
-  host: localhost
+  host: "localhost"
   port: 5432
-  user: postgres
-  password: password
-  dbname: sub_balance_db
-  sslmode: disable
+  user: "ahmadfadilah"
+  password: "postgres"
+  dbname: "sub_balance_db"
+  sslmode: "disable"
+  max_open_conns: 400
+  max_idle_conns: 50
+  conn_max_lifetime: 30m
+  conn_max_idle_time: 10m
 
-redis:
-  host: localhost
-  port: 6379
-  password: ""
-  db: 0
+logging:
+  level: "info"
+  format: "json"
+  output: "stdout"
+
+advisory_lock:
+  default_timeout: 500ms
+  max_retries: 0
+  retry_delay: 5ms
 
 sub_balance:
   default_shard_count: 3
-  consistency_check_interval: 5m
-  advisory_lock_timeout: 15s
-  hot_account_shards:
-    "acc-hot-001": 5
-    "acc-hot-002": 5
-    "acc-hot-003": 3
+  max_shard_count: 10
+  rebalance_threshold: 0.01  # 1% threshold for rebalancing
+  consistency_check_interval: 300s  # 5 minutes
+  locking_mode: "pessimistic"  # "pessimistic" or "optimistic"
+  optimistic_retry_count: 10
+  optimistic_retry_delay: "5ms"

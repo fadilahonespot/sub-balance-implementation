@@ -250,7 +250,7 @@ func (h *Handler) MigrateToSubBalance(c echo.Context) error {
 }
 
 // ProcessTransactionWithBP handles transaction processing requests
-func (h *Handler) ProcessTransactionWithBP(c echo.Context) error {
+func (h *Handler) ProcessTransaction(c echo.Context) error {
 	var req transaction.ProcessTransactionWithBPRequest
 	if err := c.Bind(&req); err != nil {
 		h.logger.Error("Failed to bind request", zap.Error(err))
@@ -291,7 +291,13 @@ func (h *Handler) ProcessTransactionWithBP(c echo.Context) error {
 			Description:     req.Description,
 			Metadata:        req.Metadata,
 		}
-		result, err = h.usecases.SubBalanceManager.ProcessDebitTransaction(c.Request().Context(), debitReq)
+
+		// Use locking mode from config
+		if h.config.SubBalance.LockingMode == "optimistic" {
+			result, err = h.usecases.SubBalanceManager.ProcessDebitTransactionOptimistic(c.Request().Context(), debitReq)
+		} else {
+			result, err = h.usecases.SubBalanceManager.ProcessDebitTransaction(c.Request().Context(), debitReq)
+		}
 	case transaction.TransactionTypeCredit:
 		// Process credit transaction
 		creditReq := sub_balance_manager.ProcessTransactionRequest{

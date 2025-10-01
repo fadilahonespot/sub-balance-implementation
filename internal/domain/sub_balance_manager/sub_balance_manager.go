@@ -10,18 +10,19 @@ import (
 // SubBalanceManager handles sub balance operations and routing
 type SubBalanceManager struct {
 	ShardCount int
-	HotAccount bool
 }
 
 // ShardSelectionStrategy defines how shards are selected for operations
 type ShardSelectionStrategy string
 
 const (
-	StrategyBalanceBased      ShardSelectionStrategy = "balance_based"
-	StrategyLoadBalancing     ShardSelectionStrategy = "load_balancing"
-	StrategyRoundRobin        ShardSelectionStrategy = "round_robin"
-	StrategyHashBased         ShardSelectionStrategy = "hash_based"
-	StrategyConsistentHashing ShardSelectionStrategy = "consistent_hashing"
+	StrategyBalanceBased       ShardSelectionStrategy = "balance_based"
+	StrategyLoadBalancing      ShardSelectionStrategy = "load_balancing"
+	StrategyRoundRobin         ShardSelectionStrategy = "round_robin"
+	StrategyHashBased          ShardSelectionStrategy = "hash_based"
+	StrategyConsistentHashing  ShardSelectionStrategy = "consistent_hashing"
+	StrategyHighestBalance     ShardSelectionStrategy = "highest_balance"
+	StrategyPreBalanceTransfer ShardSelectionStrategy = "pre_balance_transfer"
 )
 
 // TransactionType represents the type of transaction
@@ -98,6 +99,7 @@ type Usecase interface {
 
 	// Transaction Processing
 	ProcessDebitTransaction(ctx context.Context, req ProcessTransactionRequest) (*TransactionResult, error)
+	ProcessDebitTransactionOptimistic(ctx context.Context, req ProcessTransactionRequest) (*TransactionResult, error) // NEW: Optimistic locking version
 	ProcessCreditTransaction(ctx context.Context, req ProcessTransactionRequest) (*TransactionResult, error)
 	ProcessCrossShardTransaction(ctx context.Context, req ProcessCrossShardTransactionRequest) (*CrossShardTransactionResult, error)
 
@@ -117,7 +119,6 @@ type SubBalanceInfo struct {
 	ShardCount     int             `json:"shard_count"`
 	TotalBalance   decimal.Decimal `json:"total_balance"`
 	UseSubBalance  bool            `json:"use_sub_balance"`
-	HotAccount     bool            `json:"hot_account"`
 	Shards         []*ShardInfo    `json:"shards"`
 	LastRebalanced *time.Time      `json:"last_rebalanced,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`

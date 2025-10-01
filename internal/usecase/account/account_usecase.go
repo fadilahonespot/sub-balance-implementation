@@ -65,8 +65,6 @@ func (u *usecase) CreateAccount(ctx context.Context, req account.CreateAccountRe
 		UpperLimit:           req.UpperLimit,
 		LowerLimit:           req.LowerLimit,
 		Active:               true,
-		HotAccount:           false, // Will be determined later
-		DebitHotAccount:      false, // Will be determined later
 		UseSubBalance:        req.UseSubBalance,
 		SubBalanceShardCount: req.ShardCount,
 	}
@@ -155,12 +153,6 @@ func (u *usecase) UpdateAccount(ctx context.Context, id string, req account.Upda
 	}
 	if req.Active != nil {
 		acc.Active = *req.Active
-	}
-	if req.HotAccount != nil {
-		acc.HotAccount = *req.HotAccount
-	}
-	if req.DebitHotAccount != nil {
-		acc.DebitHotAccount = *req.DebitHotAccount
 	}
 	if req.UseSubBalance != nil {
 		acc.UseSubBalance = *req.UseSubBalance

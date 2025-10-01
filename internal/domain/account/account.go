@@ -25,8 +25,6 @@ type Account struct {
 	UpperLimit           decimal.Decimal `json:"upper_limit" gorm:"column:upper_limit;type:decimal(20,2)"`
 	LowerLimit           decimal.Decimal `json:"lower_limit" gorm:"column:lower_limit;type:decimal(20,2)"`
 	Active               bool            `json:"active" gorm:"column:active"`
-	HotAccount           bool            `json:"hot_account" gorm:"column:hot_account"`
-	DebitHotAccount      bool            `json:"debit_hot_account" gorm:"column:debit_hot_account"`
 	UseSubBalance        bool            `json:"use_sub_balance" gorm:"column:use_sub_balance"`
 	SubBalanceShardCount int             `json:"sub_balance_shard_count" gorm:"column:sub_balance_shard_count"`
 	Checksum             string          `json:"checksum" gorm:"column:checksum"`
@@ -45,7 +43,6 @@ type Repository interface {
 	Update(ctx context.Context, account *Account) error
 	Delete(ctx context.Context, id string) error
 	List(ctx context.Context, limit, offset int) ([]*Account, error)
-	GetHotAccounts(ctx context.Context) ([]*Account, error)
 	GetAccountsWithSubBalance(ctx context.Context) ([]*Account, error)
 	UpdateSubBalanceConfig(ctx context.Context, accountID string, useSubBalance bool, shardCount int) error
 	GetAccountStats(ctx context.Context) (map[string]interface{}, error)
@@ -78,17 +75,15 @@ type CreateAccountRequest struct {
 }
 
 type UpdateAccountRequest struct {
-	WalletTypeName  *string          `json:"wallet_type_name,omitempty"`
-	InstanceType    *string          `json:"instance_type,omitempty"`
-	WalletStatus    *string          `json:"wallet_status,omitempty"`
-	MinimumBalance  *decimal.Decimal `json:"minimum_balance,omitempty"`
-	UpperLimit      *decimal.Decimal `json:"upper_limit,omitempty"`
-	LowerLimit      *decimal.Decimal `json:"lower_limit,omitempty"`
-	Active          *bool            `json:"active,omitempty"`
-	HotAccount      *bool            `json:"hot_account,omitempty"`
-	DebitHotAccount *bool            `json:"debit_hot_account,omitempty"`
-	UseSubBalance   *bool            `json:"use_sub_balance,omitempty"`
-	ShardCount      *int             `json:"shard_count,omitempty"`
+	WalletTypeName *string          `json:"wallet_type_name,omitempty"`
+	InstanceType   *string          `json:"instance_type,omitempty"`
+	WalletStatus   *string          `json:"wallet_status,omitempty"`
+	MinimumBalance *decimal.Decimal `json:"minimum_balance,omitempty"`
+	UpperLimit     *decimal.Decimal `json:"upper_limit,omitempty"`
+	LowerLimit     *decimal.Decimal `json:"lower_limit,omitempty"`
+	Active         *bool            `json:"active,omitempty"`
+	UseSubBalance  *bool            `json:"use_sub_balance,omitempty"`
+	ShardCount     *int             `json:"shard_count,omitempty"`
 }
 
 type AccountBalanceResponse struct {
@@ -118,7 +113,6 @@ type SearchCriteria struct {
 	WalletTypeID  string `json:"wallet_type_id,omitempty"`
 	InstanceType  string `json:"instance_type,omitempty"`
 	Active        *bool  `json:"active,omitempty"`
-	HotAccount    *bool  `json:"hot_account,omitempty"`
 	UseSubBalance *bool  `json:"use_sub_balance,omitempty"`
 	Limit         int    `json:"limit,omitempty"`
 	Offset        int    `json:"offset,omitempty"`

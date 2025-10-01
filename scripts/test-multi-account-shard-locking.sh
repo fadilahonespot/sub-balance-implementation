@@ -336,6 +336,10 @@ run_multi_account_test() {
     echo "   Error breakdown: timeout: $timeout_errors, advisory lock: $advisory_lock_errors, other: $other_errors"
     echo "   Shards used: $total_shards_used"
     
+    # Wait for all processes to complete and system to stabilize
+    echo -e "${YELLOW}   ⏳ Waiting for system to stabilize...${NC}"
+    sleep 2
+    
     # Add to report
     cat >> "$REPORT_FILE" << EOF
 
@@ -378,21 +382,33 @@ echo -e "${CYAN}🧪 Starting Multi-Account TRUE Shard-Level Locking Tests...${N
 
 # Test 1: 10 TPS
 run_multi_account_test "Multi_Account_Test/10_TPS" 10 100 10
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 2: 20 TPS
 run_multi_account_test "Multi_Account_Test/20_TPS" 20 200 20
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 3: 30 TPS
 run_multi_account_test "Multi_Account_Test/30_TPS" 30 300 30
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 4: 50 TPS
 run_multi_account_test "Multi_Account_Test/50_TPS" 50 500 50
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 5: 100 TPS
 run_multi_account_test "Multi_Account_Test/100_TPS" 100 1000 100
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 6: 200 TPS
 run_multi_account_test "Multi_Account_Test/200_TPS" 200 2000 200
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 7: 300 TPS
 run_multi_account_test "Multi_Account_Test/300_TPS" 300 3000 300

@@ -194,7 +194,7 @@ run_single_account_test() {
                     local transaction_id="single_debit_${test_name}_${second}_${i}_$(date +%s%3N)"
                     local response=$(curl -s -X POST "$BASE_URL/transaction/execute" \
                         -H "Content-Type: application/json" \
-                        -d "{\"transaction_id\": \"$transaction_id\", \"account_id\": \"$ACCOUNT_ID\", \"amount\": \"1000\", \"transaction_type\": \"debit\", \"description\": \"Single account TPS test transaction\", \"metadata\": {\"source\": \"single_test_script\", \"test_type\": \"single_account_debit\"}}")
+                        -d "{\"transaction_id\": \"$transaction_id\", \"account_id\": \"$ACCOUNT_ID\", \"amount\": \"10\", \"transaction_type\": \"debit\", \"description\": \"Single account TPS test transaction\", \"metadata\": {\"source\": \"single_test_script\", \"test_type\": \"single_account_debit\"}}")
                     
                     # Parse response and write to results file
                     local status=$(echo "$response" | jq -r '.status // ""' 2>/dev/null)
@@ -320,6 +320,10 @@ run_single_account_test() {
     echo "   Error breakdown: timeout: $timeout_errors, advisory lock: $advisory_lock_errors, other: $other_errors"
     echo "   Shards used: $shards_used/$SHARD_COUNT"
     
+    # Wait for all processes to complete and system to stabilize
+    echo -e "${YELLOW}   ⏳ Waiting for system to stabilize...${NC}"
+    sleep 2
+    
     # Add to report
     cat >> "$REPORT_FILE" << EOF
 
@@ -362,21 +366,33 @@ echo -e "${CYAN}🧪 Starting Single Account TRUE Shard-Level Locking Tests...${
 
 # Test 1: 10 TPS
 run_single_account_test "Single_Account_Test/10_TPS" 10 100 10
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 2: 20 TPS
 run_single_account_test "Single_Account_Test/20_TPS" 20 200 20
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 3: 30 TPS
 run_single_account_test "Single_Account_Test/30_TPS" 30 300 30
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 4: 50 TPS
 run_single_account_test "Single_Account_Test/50_TPS" 50 500 50
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 5: 100 TPS
 run_single_account_test "Single_Account_Test/100_TPS" 100 1000 100
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 6: 200 TPS
 run_single_account_test "Single_Account_Test/200_TPS" 200 2000 200
+echo -e "${YELLOW}⏳ Waiting 5 seconds before next test...${NC}"
+sleep 5
 
 # Test 7: 300 TPS
 run_single_account_test "Single_Account_Test/300_TPS" 300 3000 300

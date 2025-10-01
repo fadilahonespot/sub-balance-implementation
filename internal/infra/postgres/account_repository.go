@@ -156,24 +156,6 @@ func (r *accountRepository) List(ctx context.Context, limit, offset int) ([]*acc
 	return accounts, nil
 }
 
-// GetHotAccounts retrieves all hot accounts
-func (r *accountRepository) GetHotAccounts(ctx context.Context) ([]*account.Account, error) {
-	var accounts []*account.Account
-
-	if err := r.db.WithContext(ctx).Where("hot_account = ?", true).Find(&accounts).Error; err != nil {
-		r.logger.Error("Failed to get hot accounts",
-			zap.Error(err),
-		)
-		return nil, fmt.Errorf("failed to get hot accounts: %w", err)
-	}
-
-	r.logger.Info("Retrieved hot accounts",
-		zap.Int("count", len(accounts)),
-	)
-
-	return accounts, nil
-}
-
 // GetAccountsWithSubBalance retrieves accounts that use sub balance
 func (r *accountRepository) GetAccountsWithSubBalance(ctx context.Context) ([]*account.Account, error) {
 	var accounts []*account.Account
@@ -225,9 +207,7 @@ func (r *accountRepository) GetAccountStats(ctx context.Context) (map[string]int
 	var stats struct {
 		TotalAccounts      int64 `json:"total_accounts"`
 		ActiveAccounts     int64 `json:"active_accounts"`
-		HotAccounts        int64 `json:"hot_accounts"`
 		SubBalanceAccounts int64 `json:"sub_balance_accounts"`
-		DebitHotAccounts   int64 `json:"debit_hot_accounts"`
 	}
 
 	// Get total accounts
@@ -240,27 +220,15 @@ func (r *accountRepository) GetAccountStats(ctx context.Context) (map[string]int
 		return nil, fmt.Errorf("failed to get active accounts count: %w", err)
 	}
 
-	// Get hot accounts
-	if err := r.db.WithContext(ctx).Model(&account.Account{}).Where("hot_account = ?", true).Count(&stats.HotAccounts).Error; err != nil {
-		return nil, fmt.Errorf("failed to get hot accounts count: %w", err)
-	}
-
 	// Get sub balance accounts
 	if err := r.db.WithContext(ctx).Model(&account.Account{}).Where("use_sub_balance = ?", true).Count(&stats.SubBalanceAccounts).Error; err != nil {
 		return nil, fmt.Errorf("failed to get sub balance accounts count: %w", err)
 	}
 
-	// Get debit hot accounts
-	if err := r.db.WithContext(ctx).Model(&account.Account{}).Where("debit_hot_account = ?", true).Count(&stats.DebitHotAccounts).Error; err != nil {
-		return nil, fmt.Errorf("failed to get debit hot accounts count: %w", err)
-	}
-
 	return map[string]interface{}{
 		"total_accounts":       stats.TotalAccounts,
 		"active_accounts":      stats.ActiveAccounts,
-		"hot_accounts":         stats.HotAccounts,
 		"sub_balance_accounts": stats.SubBalanceAccounts,
-		"debit_hot_accounts":   stats.DebitHotAccounts,
 	}, nil
 }
 
@@ -288,10 +256,6 @@ func (r *accountRepository) SearchAccounts(ctx context.Context, criteria account
 
 	if criteria.Active != nil {
 		query = query.Where("active = ?", *criteria.Active)
-	}
-
-	if criteria.HotAccount != nil {
-		query = query.Where("hot_account = ?", *criteria.HotAccount)
 	}
 
 	if criteria.UseSubBalance != nil {
