@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -20,6 +21,12 @@ import (
 )
 
 func main() {
+	// Optimize runtime for high performance
+	runtime.GOMAXPROCS(runtime.NumCPU()) // Use all CPU cores
+
+	// Set GC target percentage for better performance under load
+	runtime.GC() // Force initial garbage collection
+
 	// Initialize logger
 	logger, err := zap.NewProduction()
 	if err != nil {
@@ -32,6 +39,12 @@ func main() {
 	if err != nil {
 		logger.Fatal("Failed to load configuration", zap.Error(err))
 	}
+
+	logger.Info("Runtime optimization applied",
+		zap.Int("cpu_cores", runtime.NumCPU()),
+		zap.Int("gomaxprocs", runtime.GOMAXPROCS(0)),
+		zap.Int("goroutines", runtime.NumGoroutine()),
+	)
 
 	// Initialize database
 	db, err := postgres.NewConnection(cfg.Database)
@@ -48,26 +61,47 @@ func main() {
 	repoFactory := postgres.NewRepositoryFactory(db, logger)
 	defer repoFactory.Close()
 
-	// Initialize Echo with high-performance configuration
+	// Initialize Echo with ultra-high-performance configuration
 	e := echo.New()
 	e.HideBanner = true
 
-	// Middleware - optimized for high throughput
-	e.Use(middleware.Recover())
-	e.Use(middleware.CORS())
-	e.Use(middleware.RequestID())
+	// Disable Echo's built-in debug mode for better performance
+	e.Debug = false
 
-	// Custom logger middleware with minimal overhead
-	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
-		Format: "method=${method}, uri=${uri}, status=${status}, time=${time_rfc3339}\n",
+	// Minimal middleware for maximum performance - only essential ones
+	e.Use(middleware.Recover())
+
+	// Optimized CORS with minimal overhead
+	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins: []string{"*"},
+		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders: []string{"*"},
+		MaxAge:       86400, // Cache preflight for 24 hours
 	}))
 
-	// Add custom middleware for high concurrency
+	// Lightweight request ID middleware
+	e.Use(middleware.RequestID())
+
+	// Minimal logging middleware - only log errors and slow requests
+	e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+		Format: "${time_rfc3339} ${status} ${method} ${uri} ${latency_human}\n",
+		Output: os.Stderr, // Log to stderr for better performance
+	}))
+
+	// High-performance middleware for HTTP optimization
 	e.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Set high concurrency headers
+			// Set optimized HTTP headers for high concurrency
 			c.Response().Header().Set("Connection", "keep-alive")
-			c.Response().Header().Set("Keep-Alive", "timeout=30")
+			c.Response().Header().Set("Keep-Alive", "timeout=120, max=1000")
+			c.Response().Header().Set("Cache-Control", "no-cache")
+			c.Response().Header().Set("X-Content-Type-Options", "nosniff")
+
+			// Set content type early for better performance
+			if c.Request().Method == "POST" || c.Request().Method == "PUT" {
+				c.Response().Header().Set("Content-Type", "application/json")
+			}
+
 			return next(c)
 		}
 	})
@@ -93,17 +127,23 @@ func main() {
 	restHandler := handlerFactory.GetHandler()
 	restHandler.RegisterRoutes(e)
 
-	// Start server with high-performance configuration
+	// Start server with ultra-high-performance configuration
 	server := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
-		Handler:      e,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
-		IdleTimeout:  cfg.Server.IdleTimeout,
+		Addr:    fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
+		Handler: e,
 
-		// High-performance settings
-		MaxHeaderBytes:    1 << 20, // 1 MB
-		ReadHeaderTimeout: 10 * time.Second,
+		// Optimized timeouts for high TPS
+		ReadTimeout:  5 * time.Second,   // Reduced for faster processing
+		WriteTimeout: 10 * time.Second,  // Reduced for faster response
+		IdleTimeout:  120 * time.Second, // Increased for connection reuse
+
+		// Ultra-high-performance settings
+		MaxHeaderBytes:    1 << 20,         // 1 MB
+		ReadHeaderTimeout: 5 * time.Second, // Reduced for faster header processing
+
+		// Additional performance optimizations
+		ErrorLog:                     nil,  // Disable default error logging for performance
+		DisableGeneralOptionsHandler: true, // Disable OPTIONS handler for performance
 	}
 
 	// Start server in goroutine

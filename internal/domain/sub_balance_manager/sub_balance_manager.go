@@ -88,7 +88,7 @@ type Usecase interface {
 	GetSubBalanceInfo(ctx context.Context, accountID string) (*SubBalanceInfo, error)
 
 	// Shard Selection
-	SelectShardForDebit(ctx context.Context, accountID string, amount decimal.Decimal) (*ShardSelectionResult, error)
+	SelectShardForDebit(ctx context.Context, accountID string, amount decimal.Decimal, transactionID string) (*ShardSelectionResult, error)
 	SelectShardForCredit(ctx context.Context, accountID string, amount decimal.Decimal) (*ShardSelectionResult, error)
 	SelectShardsForCrossShard(ctx context.Context, accountID string, amount decimal.Decimal) ([]*ShardSelectionResult, error)
 

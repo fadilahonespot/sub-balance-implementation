@@ -190,23 +190,40 @@ run_single_account_test() {
             # Send batch of requests concurrently
             for ((i=1; i<=current_batch_size; i++)); do
                 {
-                    # Send individual transaction request
+                    # Send individual transaction request with timeout and detailed logging
                     local transaction_id="single_debit_${test_name}_${second}_${i}_$(date +%s%3N)"
-                    local response=$(curl -s -X POST "$BASE_URL/transaction/execute" \
+                    local request_start=$(date +%s.%N)
+                    
+                    # Simple and robust approach - just check if response contains "completed"
+                    local response=$(curl -s -m 30 -X POST "$BASE_URL/transaction/execute" \
                         -H "Content-Type: application/json" \
                         -d "{\"transaction_id\": \"$transaction_id\", \"account_id\": \"$ACCOUNT_ID\", \"amount\": \"10\", \"transaction_type\": \"debit\", \"description\": \"Single account TPS test transaction\", \"metadata\": {\"source\": \"single_test_script\", \"test_type\": \"single_account_debit\"}}")
                     
-                    # Parse response and write to results file
-                    local status=$(echo "$response" | jq -r '.status // ""' 2>/dev/null)
-                    local error_msg=$(echo "$response" | jq -r '.error // ""' 2>/dev/null)
-                    local message=$(echo "$response" | jq -r '.message // ""' 2>/dev/null)
+                    local request_end=$(date +%s.%N)
+                    local request_duration=$(echo "$request_end - $request_start" | bc)
                     
-                    if [ "$status" = "completed" ]; then
+                    # Log detailed request info for debugging
+                    echo "$(date +%s.%N)|$transaction_id|${#response}|$request_duration" >> "$temp_dir/request_log.txt"
+                    
+                    # Simple and robust parsing - check if response contains success indicators
+                    if [ -z "$response" ]; then
+                        echo "NO_RESPONSE:$transaction_id" >> "$results_file"
+                        echo "$(date +%s.%N)|NO_RESPONSE|$transaction_id|$request_duration" >> "$temp_dir/silent_failures.txt"
+                    elif echo "$response" | grep -q '"status":"completed"'; then
                         echo "SUCCESS" >> "$results_file"
-                    elif [[ "$error_msg" == *"Rate limit"* ]] || [[ "$message" == *"Rate limit"* ]]; then
+                    elif echo "$response" | grep -q '"error":'; then
+                        echo "FAILED:$transaction_id" >> "$results_file"
+                        echo "$(date +%s.%N)|FAILED|$transaction_id|$request_duration|$response" >> "$temp_dir/silent_failures.txt"
+                    elif echo "$response" | grep -q "Rate limit"; then
                         echo "RATE_LIMITED" >> "$results_file"
+                    elif echo "$response" | grep -q "timeout\|Timeout"; then
+                        echo "TIMEOUT" >> "$results_file"
+                        echo "$(date +%s.%N)|TIMEOUT|$transaction_id|$request_duration" >> "$temp_dir/silent_failures.txt"
+                    elif echo "$response" | grep -q "advisory lock\|failed to acquire"; then
+                        echo "ADVISORY_LOCK" >> "$results_file"
                     else
-                        echo "FAILED:$error_msg" >> "$results_file"
+                        echo "UNKNOWN:$transaction_id" >> "$results_file"
+                        echo "$(date +%s.%N)|UNKNOWN|$transaction_id|$request_duration|$response" >> "$temp_dir/silent_failures.txt"
                     fi
                 } &
             done
@@ -231,13 +248,30 @@ run_single_account_test() {
             fi
         done
         
-        # Process results
+        # Process results and count different failure types
+        local no_response_count=0
+        local server_error_count=0
+        
         if [ -f "$results_file" ]; then
             while IFS= read -r line; do
                 if [ "$line" = "SUCCESS" ]; then
                     ((successful++))
                 elif [ "$line" = "RATE_LIMITED" ]; then
                     ((rate_limited++))
+                    ((failed++))
+                elif [[ "$line" == *"NO_RESPONSE"* ]]; then
+                    ((no_response_count++))
+                    ((failed++))
+                elif [[ "$line" == *"TIMEOUT"* ]]; then
+                    ((timeout_errors++))
+                    ((failed++))
+                elif [[ "$line" == *"SERVER_ERROR"* ]]; then
+                    ((server_error_count++))
+                    ((other_errors++))
+                    ((failed++))
+                elif [[ "$line" == *"ADVISORY_LOCK"* ]]; then
+                    ((advisory_lock_errors++))
+                    ((other_errors++))
                     ((failed++))
                 elif [[ "$line" == *"timeout"* ]] || [[ "$line" == *"Timeout"* ]]; then
                     ((timeout_errors++))
@@ -254,8 +288,24 @@ run_single_account_test() {
             done < "$results_file"
         fi
         
+        # Log silent failures if any
+        if [ -f "$temp_dir/silent_failures.txt" ] && [ -s "$temp_dir/silent_failures.txt" ]; then
+            echo -e "${RED}⚠️  Silent failures detected in second $second:${NC}"
+            while IFS='|' read -r timestamp failure_type transaction_id duration error_code error_msg; do
+                if [ -n "$failure_type" ] && [ -n "$transaction_id" ]; then
+                    echo -e "   ${RED}• $failure_type: $transaction_id (${duration}s)${NC}"
+                    if [ -n "$error_code" ] && [ "$error_code" != "duration" ]; then
+                        echo -e "     ${RED}  HTTP: $error_code${NC}"
+                    fi
+                    if [ -n "$error_msg" ] && [ "$error_msg" != "duration" ]; then
+                        echo -e "     ${RED}  Error: $error_msg${NC}"
+                    fi
+                fi
+            done < "$temp_dir/silent_failures.txt"
+        fi
+        
         # Clean up temp files
-        rm -rf "$temp_dir"
+        rm -rf "$temp_dir" 2>/dev/null || true
         
         # Ensure we don't exceed 1 second for this batch
         local second_end=$(date +%s.%N)
@@ -310,6 +360,8 @@ run_single_account_test() {
     error_rates_array+=("$error_rate")
     timeout_rates_array+=("$timeout_rate")
     shard_usage_array+=("$shards_used")
+    no_response_counts_array+=("$no_response_count")
+    server_error_counts_array+=("$server_error_count")
     
     echo -e "${GREEN}   ✅ $test_name completed${NC}"
     echo "   Duration: $(printf "%.2f" $duration)s"
@@ -317,7 +369,7 @@ run_single_account_test() {
     echo "   Success Rate: $success_rate%"
     echo "   TPS Efficiency: ${tps_efficiency}x"
     echo "   Performance: $performance_status"
-    echo "   Error breakdown: timeout: $timeout_errors, advisory lock: $advisory_lock_errors, other: $other_errors"
+    echo "   Error breakdown: timeout: $timeout_errors, advisory lock: $advisory_lock_errors, no response: $no_response_count, server error: $server_error_count, other: $other_errors"
     echo "   Shards used: $shards_used/$SHARD_COUNT"
     
     # Wait for all processes to complete and system to stabilize

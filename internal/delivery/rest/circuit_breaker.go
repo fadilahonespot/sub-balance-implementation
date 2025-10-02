@@ -83,10 +83,11 @@ func (cb *CircuitBreaker) recordResult(err error) {
 		}
 	} else {
 		// Success - reset failure count and close circuit if it was half-open
-		if cb.state == StateHalfOpen {
+		switch cb.state {
+		case StateHalfOpen:
 			cb.failureCount = 0
 			cb.state = StateClosed
-		} else if cb.state == StateClosed {
+		case StateClosed:
 			// Reset failure count on success in closed state
 			cb.failureCount = 0
 		}

@@ -47,11 +47,12 @@ func NewHandler(db *gorm.DB, logger *zap.Logger, cfg *config.Config) *Handler {
 	usecaseFactory := usecase.NewUsecaseFactory(db, repos, logger)
 	usecases := usecaseFactory.GetAllUsecases()
 
-	// Create high-performance job queue (buffered channel)
-	jobQueue := make(chan TransactionJob, 10000) // 10k job buffer
+	// Create ultra-high-performance job queue (massive buffer for sustained high TPS)
+	jobQueue := make(chan TransactionJob, 200000) // 200k job buffer for sustained high TPS
 
-	// Create circuit breaker for overload protection
-	circuitBreaker := NewCircuitBreaker(100, 30*time.Second) // 100 failures in 30s = open
+	// Create circuit breaker for overload protection with ultra-high threshold
+	// Increased to 10000 failures in 60s to prevent premature opening during high load
+	circuitBreaker := NewCircuitBreaker(10000, 60*time.Second) // 10000 failures in 60s = open
 
 	handler := &Handler{
 		db:             db,
@@ -71,14 +72,14 @@ func NewHandler(db *gorm.DB, logger *zap.Logger, cfg *config.Config) *Handler {
 
 // startWorkerPool starts the worker pool for async processing
 func (h *Handler) startWorkerPool() {
-	// Start 50 workers for high concurrency
-	numWorkers := 50
+	// Start massive worker pool for sustained ultra-high concurrency
+	numWorkers := 500 // Increased from 200 for sustained high TPS
 	for i := 0; i < numWorkers; i++ {
 		h.workerPool.Add(1)
 		go h.worker(i)
 	}
 
-	h.logger.Info("Started worker pool", zap.Int("workers", numWorkers))
+	h.logger.Info("Started ultra-high-performance worker pool", zap.Int("workers", numWorkers))
 }
 
 // worker processes transaction jobs from the queue

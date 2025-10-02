@@ -37,6 +37,22 @@ func (h *Handler) Metrics(c echo.Context) error {
 	}
 	dbStats := sqlDB.Stats()
 
+	// Get circuit breaker stats
+	circuitBreakerState := h.circuitBreaker.GetState()
+	circuitBreakerFailures := h.circuitBreaker.GetFailureCount()
+
+	var circuitBreakerStateStr string
+	switch circuitBreakerState {
+	case 0: // StateClosed
+		circuitBreakerStateStr = "closed"
+	case 1: // StateOpen
+		circuitBreakerStateStr = "open"
+	case 2: // StateHalfOpen
+		circuitBreakerStateStr = "half-open"
+	default:
+		circuitBreakerStateStr = "unknown"
+	}
+
 	return c.JSON(http.StatusOK, map[string]interface{}{
 		"service": map[string]interface{}{
 			"status":    "healthy",
@@ -53,6 +69,11 @@ func (h *Handler) Metrics(c echo.Context) error {
 			"max_idle_closed":      dbStats.MaxIdleClosed,
 			"max_idle_time_closed": dbStats.MaxIdleTimeClosed,
 			"max_lifetime_closed":  dbStats.MaxLifetimeClosed,
+		},
+		"circuit_breaker": map[string]interface{}{
+			"state":     circuitBreakerStateStr,
+			"failures":  circuitBreakerFailures,
+			"threshold": 10000,
 		},
 	})
 }
